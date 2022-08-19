@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    
+    <!-- Unsafe things -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnablePreviewFeatures>true</EnablePreviewFeatures>
+    
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Garyon" Version="0.2.7" />
+    <PackageReference Include="System.Runtime.Experimental" Version="6.0.2" />
+    <PackageReference Include="UnitsNet" Version="4.129.0" />
+    <PackageReference Include="UnitsNet.NumberExtensions" Version="4.129.0" />
+    <PackageReference Include="RoseLynn" Version="0.4.3" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <GetTargetPathDependsOn>$(GetTargetPathDependsOn);GetDependencyTargetPaths</GetTargetPathDependsOn>
+  </PropertyGroup>
+
+  <Target Name="GetDependencyTargetPaths">
+    <ItemGroup>
+      <TargetPathWithTargetPlatformMoniker Include="$(PKGRoseLynn)\lib\netstandard2.0\RoseLynn.dll" IncludeRuntimeDependency="false" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpatialAccessMethods.SourceGenerators\SpatialAccessMethods.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
