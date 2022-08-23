@@ -1,16 +1,9 @@
-﻿using Garyon.DataStructures;
-using Garyon.Exceptions;
-using Garyon.Extensions;
-using Garyon.Functions;
+﻿using Garyon.Extensions;
 using Garyon.Objects;
 using SpatialAccessMethods.FileManagement;
 using SpatialAccessMethods.Utilities;
 using System.Diagnostics;
-using System.Reflection.Metadata.Ecma335;
-using System.Reflection.PortableExecutable;
-using System.Security.Cryptography;
 using UnitsNet;
-using UnitsNet.NumberExtensions.NumberToCoefficientOfThermalExpansion;
 using UnitsNet.NumberExtensions.NumberToInformation;
 
 namespace SpatialAccessMethods.DataStructures;
@@ -147,21 +140,99 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
-    private void Split()
+    private void Split(Node node)
     {
-        int axis = ChooseSplitAxis();
-        int splitIndex = ChooseSplitIndex();
+        var d30 = AttemptSplit(0.30);
+        var d40 = AttemptSplit(0.40);
+        var splitDistribution = d40;
+
+        if (d30.OverlapValue < d40.OverlapValue)
+            splitDistribution = d30;
+
+        // TODO: Create the new split nodes
+
+        RectangleDistribution AttemptSplit(double maxOrderRate)
+        {
+            var axis = ChooseSplitAxis(maxOrderRate, out var rectangleDistributions);
+            return ChooseSplitIndex(rectangleDistributions);
+        }
+
+        Axis ChooseSplitAxis(double maxOrderRate, out RectangleDistribution[] rectangleDistributions)
+        {
+            // This should be faster than invoking Dimensionality
+            int dimensions = node.Region.Rank;
+            var childrenRectangles = node.GetChildrenRectangles().ToArray();
+            var resultingAxis = Axis.Invalid;
+            int fixedEntries = FixedEntries(maxOrderRate);
+            int distributionCount = DistributionCount(maxOrderRate);
+            for (int i = 0; i < dimensions; i++)
+            {
+                var sorted = childrenRectangles.ToArray().SortBy(RectangleComparer);
+
+                RectangleDistribution[] GetDistributions()
+                {
+                    var result = new RectangleDistribution[distributionCount];
+
+                    for (int k = 1; k < distributionCount; k++)
+                    {
+                        int split = fixedEntries - 1 + k;
+                        result[k - 1] = new(split, sorted);
+                    }
+
+                    return result;
+                }
+                int RectangleComparer(Rectangle a, Rectangle b)
+                {
+                    int comparison = a.MinPoint.GetCoordinate(i).CompareTo(b.MinPoint.GetCoordinate(i));
+                    if (comparison is not 0)
+                        return comparison;
+
+                    return a.MaxPoint.GetCoordinate(i).CompareTo(b.MaxPoint.GetCoordinate(i));
+                }
+            }
+
+            rectangleDistributions = null;
+            return Axis.Invalid;
+            //MarginValue()
+        }
+        RectangleDistribution ChooseSplitIndex(RectangleDistribution[] rectangleDistributions)
+        {
+            return null;
+        }
+    }
+    private int DistributionCount(double maxOrderRate)
+    {
+        int entries = FixedEntries(maxOrderRate);
+        return Order - 2 * (entries + 1);
+    }
+    private int FixedEntries(double maxOrderRate)
+    {
+        return (int)Math.Floor(maxOrderRate * Order);
     }
 
-    // TODO: Parameters
-    private int ChooseSplitAxis()
+    private enum Axis
     {
-        return -1;
-        //MarginValue()
+        Invalid = -1,
+        X,
+        Y,
+        Z,
+        W,
     }
-    private int ChooseSplitIndex()
+
+    private record RectangleDistribution(int SplitIndex, Rectangle[] Rectangles)
     {
-        return -1;
+        public Span<Rectangle> Left => Rectangles.AsSpan()[..SplitIndex];
+        public Span<Rectangle> Right => Rectangles.AsSpan()[SplitIndex..];
+
+        public IEnumerable<Rectangle> LeftEnumerable => Rectangles.Take(SplitIndex);
+        public IEnumerable<Rectangle> RightEnumerable => Rectangles.Skip(SplitIndex);
+
+        public Rectangle LeftMBR => Rectangle.CreateForRectangles(LeftEnumerable.ToArray());
+        public Rectangle RightMBR => Rectangle.CreateForRectangles(RightEnumerable.ToArray());
+
+        public double AreaValue => RStarTree<TValue>.AreaValue(LeftMBR, RightMBR);
+        public double MarginValue => RStarTree<TValue>.MarginValue(LeftMBR, RightMBR);
+        public double OverlapValue => RStarTree<TValue>.OverlapValue(LeftMBR, RightMBR);
     }
 
 #nullable disable
@@ -769,12 +840,12 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 WriteChangesToBuffer();
         }
 
-        public Node? GetFullyLoadedNode()
+        public Node GetFullyLoadedNode()
         {
             if (this is not LeafNode)
                 return this;
             
-            return Tree.GetNode(ID);
+            return Tree.GetNode(ID)!;
         }
 
         public Span<byte> GetDataSpan(out DataBlock dataBlock)
@@ -819,6 +890,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             Region = Region.Expand(point);
         }
+
+        public abstract IEnumerable<Rectangle> GetChildrenRectangles();
 
         // TODO: Override in LazyNode to avoid writing the children and region, if not loaded
         public virtual void WriteChangesToBuffer()
@@ -1002,6 +1075,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public LazyNode(RStarTree<TValue> tree, int id)
             : base(tree, id, 0, Enumerable.Empty<int>(), null!) { }
 
+        public override IEnumerable<Rectangle> GetChildrenRectangles()
+        {
+            return GetFullyLoadedNode().GetChildrenRectangles();
+        }
+
         private Span<byte> GetDataSpan()
         {
             return Tree.TreeBufferController.LoadDataSpan(ID);
@@ -1122,6 +1200,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             ChildrenIDs.Add(childNode.ID);
             childNode.UpdateParent(this);
         }
+
+        public override IEnumerable<Rectangle> GetChildrenRectangles()
+        {
+            return GetChildren().Select(n => n.Region);
+        }
     }
     public sealed class LeafNode : Node
     {
@@ -1138,6 +1221,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public IEnumerable<TValue> GetEntries() => ChildrenIDs.Select(Tree.GetEntry);
         
         public TValue? ValueAt(Point point) => GetEntries().FirstOrDefault(entry => entry.Location == point);
+
+        public override IEnumerable<Rectangle> GetChildrenRectangles()
+        {
+            return GetEntries().Select(e => Rectangle.FromSinglePoint(e.Location));
+        }
     }
 
     public delegate void NodeSectionTraverser(ref SpanStream writer);
