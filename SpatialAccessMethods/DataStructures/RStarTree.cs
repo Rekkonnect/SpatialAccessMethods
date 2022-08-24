@@ -1128,11 +1128,6 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             return GetFullyLoadedNode().GetChildrenRectangles();
         }
 
-        public override IEnumerable<Rectangle> GetChildrenRectangles()
-        {
-            return GetFullyLoadedNode().GetChildrenRectangles();
-        }
-
         private Span<byte> GetDataSpan()
         {
             return Tree.TreeBufferController.LoadDataSpan(ID);
@@ -1149,12 +1144,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             var writer = new SpanStream(dataSpan);
 
             WriteParentID(ref writer);
-            
-            if (region is not null)
-                WriteRegion(ref writer);
-            else
+            WriteOrSkipRegion(ref writer);
             WriteTypeAndChildrenCount(ref writer);
-            WriteChildrenIDs(ref writer);
+            WriteOrSkipChildrenIDs(ref writer);
 
             // Usually some node in that block will have caused a change
             Tree.TreeBufferController.MarkDirty(dataBlock);
@@ -1310,8 +1302,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public override LeafNode TrimRegion(Rectangle newRegion)
         {
-            // TODO:
-            return throw new NotImplementedException();
+            var entries = GetEntries();
+            entries.Dissect(entry => newRegion.Contains(entry.Location), out var inside, out var outside);
+            // Locally cache the values
+            inside = inside.ToList(ChildrenCount);
+            outside = outside.ToList(ChildrenCount);
+
+            ChildrenIDs = new(inside.Select(c => c.ID));
+            return new LeafNode(Tree, NodeID.Null, ParentID, outside.Select(c => c.ID), newRegion);
         }
 
         public IEnumerable<TValue> GetEntries() => ChildrenIDs.Select(Tree.GetEntry);
