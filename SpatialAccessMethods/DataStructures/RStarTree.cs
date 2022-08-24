@@ -149,6 +149,10 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         if (d30.OverlapValue < d40.OverlapValue)
             splitDistribution = d30;
 
+        {
+            var newCurrentRegion = splitDistribution.LeftMBR;
+            // We don't care about the right MBR
+        }
         // TODO: Create the new split nodes
 
         RectangleDistribution AttemptSplit(double maxOrderRate)
@@ -162,12 +166,16 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             // This should be faster than invoking Dimensionality
             int dimensions = node.Region.Rank;
             var childrenRectangles = node.GetChildrenRectangles().ToArray();
-            var resultingAxis = Axis.Invalid;
             int fixedEntries = FixedEntries(maxOrderRate);
             int distributionCount = DistributionCount(maxOrderRate);
+            var bestDistributions = new AxisDistributionResult(Axis.Invalid, null!);
             for (int i = 0; i < dimensions; i++)
             {
                 var sorted = childrenRectangles.ToArray().SortBy(RectangleComparer);
+                var distributions = GetDistributions();
+                var currentDistributionsResult = new AxisDistributionResult((Axis)i, distributions);
+                if (currentDistributionsResult.MarginValue < bestDistributions.MarginValue)
+                    bestDistributions = currentDistributionsResult;
 
                 RectangleDistribution[] GetDistributions()
                 {
@@ -191,13 +199,12 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 }
             }
 
-            rectangleDistributions = null;
-            return Axis.Invalid;
-            //MarginValue()
+            rectangleDistributions = bestDistributions.Distributions;
+            return bestDistributions.Axis;
         }
         RectangleDistribution ChooseSplitIndex(RectangleDistribution[] rectangleDistributions)
         {
-            return null;
+            return rectangleDistributions.Min(new RectangleDistribution.Comparer())!;
         }
     }
     private int DistributionCount(double maxOrderRate)
@@ -219,6 +226,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         W,
     }
 
+    private record AxisDistributionResult(Axis Axis, RectangleDistribution[] Distributions)
+    {
+        public double MarginValue { get; } = Distributions?.Sum(d => d.MarginValue) ?? double.MaxValue;
+    }
+
     private record RectangleDistribution(int SplitIndex, Rectangle[] Rectangles)
     {
         public Span<Rectangle> Left => Rectangles.AsSpan()[..SplitIndex];
@@ -233,6 +245,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public double AreaValue => RStarTree<TValue>.AreaValue(LeftMBR, RightMBR);
         public double MarginValue => RStarTree<TValue>.MarginValue(LeftMBR, RightMBR);
         public double OverlapValue => RStarTree<TValue>.OverlapValue(LeftMBR, RightMBR);
+
+        public sealed class Comparer : IComparer<RectangleDistribution>
+        {
+#nullable disable
+            public int Compare(RectangleDistribution a, RectangleDistribution b)
+            {
+                int comparison = a.OverlapValue.CompareTo(b.OverlapValue);
+                if (comparison is not 0)
+                    return comparison;
+
+                return a.AreaValue.CompareTo(b.AreaValue);
+            }
+#nullable restore
+        }
     }
 
 #nullable disable
@@ -543,7 +569,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                     var domination = existingEntry.Location.ResolveDomination(entry.Location, dominatingExtremum);
                     if (domination is Domination.Dominant)
                         goto nextDequeue;
+
                     // There should never be a Domination.Subordinate result, as per the algorithm
+                    Debug.Assert(domination is not Domination.Subordinate);
                 }
 
                 result.Add(entry);
@@ -824,15 +852,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public bool ShouldSplit => ChildrenIDs.Count > Tree.MinChildren;
 
         protected Node(RStarTree<TValue> tree, int id, int parentID, IEnumerable<int> childrenIDs, Rectangle region)
+            : this(tree, id)
         {
             ParentID = parentID;
-
-            ID = id;
             ChildrenIDs = new(childrenIDs);
-
-            Tree = tree;
             Region = region;
         }
+
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
+        protected Node(RStarTree<TValue> tree, int id)
+        {
+            Tree = tree;
+            ID = id;
+        }
+#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 
         ~Node()
         {
@@ -893,6 +926,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public abstract IEnumerable<Rectangle> GetChildrenRectangles();
 
+        public abstract Node TrimRegion(Rectangle newRegion);
+
         // TODO: Override in LazyNode to avoid writing the children and region, if not loaded
         public virtual void WriteChangesToBuffer()
         {
@@ -931,6 +966,13 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             writer.AdvanceValueRange<float>(2 * Region.Rank);
         }
+        protected void WriteOrSkipRegion(ref SpanStream writer)
+        {
+            if (Region is null)
+                SkipRegion(ref writer);
+            else
+                WriteRegion(ref writer);
+        }
 
         protected void WriteTypeAndChildrenCount(ref SpanStream writer)
         {
@@ -950,6 +992,13 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         protected void SkipChildrenIDs(ref SpanStream writer)
         {
             writer.AdvanceValueRange<int>(ChildrenIDs.Count);
+        }
+        protected void WriteOrSkipChildrenIDs(ref SpanStream writer)
+        {
+            if (ChildrenIDs is null)
+                SkipChildrenIDs(ref writer);
+            else
+                WriteChildrenIDs(ref writer);
         }
 
         public static Node ParseFromTree(RStarTree<TValue> tree, Span<byte> nodeBytes, int id)
@@ -1026,17 +1075,16 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     {
         private NodeType nodeType = NodeType.Unknown;
         private int childrenCount = -1;
-        private List<int> children = null!;
-        private Rectangle region = null!;
+        private Rectangle? region = null;
 
         public IEnumerable<int> ChildrenNodeIDs
         {
             get
             {
-                if (children is null)
+                if (ChildrenIDs is null)
                     LoadChildren();
 
-                return children!;
+                return ChildrenIDs!;
             }
         }
         
@@ -1054,7 +1102,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             get
             {
-                if (childrenCount is -1)
+                if (childrenCount < 0)
                     LoadNodeTypeAndChildrenCount();
 
                 return childrenCount;
@@ -1073,7 +1121,12 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
 
         public LazyNode(RStarTree<TValue> tree, int id)
-            : base(tree, id, 0, Enumerable.Empty<int>(), null!) { }
+            : base(tree, id) { }
+
+        public override IEnumerable<Rectangle> GetChildrenRectangles()
+        {
+            return GetFullyLoadedNode().GetChildrenRectangles();
+        }
 
         public override IEnumerable<Rectangle> GetChildrenRectangles()
         {
@@ -1083,6 +1136,28 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         private Span<byte> GetDataSpan()
         {
             return Tree.TreeBufferController.LoadDataSpan(ID);
+        }
+
+        public override Node TrimRegion(Rectangle newRegion)
+        {
+            throw new InvalidOperationException("The lazy node should not be able to be trimmed.");
+        }
+
+        public override void WriteChangesToBuffer()
+        {
+            var dataSpan = GetDataSpan(out var dataBlock);
+            var writer = new SpanStream(dataSpan);
+
+            WriteParentID(ref writer);
+            
+            if (region is not null)
+                WriteRegion(ref writer);
+            else
+            WriteTypeAndChildrenCount(ref writer);
+            WriteChildrenIDs(ref writer);
+
+            // Usually some node in that block will have caused a change
+            Tree.TreeBufferController.MarkDirty(dataBlock);
         }
 
         // The loading has been copy-pasted
@@ -1111,10 +1186,12 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             dataSpan = dataSpan[offset..];
             var reader = new SpanStream(dataSpan);
             int count = ChildrenCount;
-            
-            children = new List<int>(count);
+
+            var tempIDs = new int[count];
             for (int i = 0; i < count; i++)
-                children.Add(reader.ReadValue<int>());
+                tempIDs[i] = reader.ReadValue<int>();
+
+            ChildrenIDs = new(tempIDs);
         }
         public void LoadParentID()
         {
@@ -1152,6 +1229,18 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public IEnumerable<Node> GetChildren() => ChildrenIDs.Select(Tree.GetNode) as IEnumerable<Node>;
 
+        public override ParentNode TrimRegion(Rectangle newRegion)
+        {
+            var children = GetChildren();
+            children.Dissect(child => newRegion.Contains(child.Region), out var inside, out var outside);
+            // Locally cache the values
+            inside = inside.ToList(ChildrenCount);
+            outside = outside.ToList(ChildrenCount);
+
+            ChildrenIDs = new(inside.Select(c => c.ID));
+            return new ParentNode(Tree, NodeID.Null, ParentID, outside.Select(c => c.ID), newRegion);
+        }
+
         public bool IsParentOf(Node child) => child.ParentID == ID;
 
         public double GetTotalChildrenOverlappingArea(Node targetChild)
@@ -1187,11 +1276,12 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             foreach (var childID in ChildrenIDs)
             {
-                var childNode = Tree.GetNode(childID)!;
+                var childNode = Tree.GetLazyNode(childID)!;
                 // We're just informing our children that they are adopted
                 // They don't quite have the freedom of updating their parents themselves
                 // What a dark time to live in
                 childNode.ParentID = ID;
+                childNode.WriteChangesToBuffer();
             }
         }
 
@@ -1203,7 +1293,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public override IEnumerable<Rectangle> GetChildrenRectangles()
         {
-            return GetChildren().Select(n => n.Region);
+            return GetLazyChildren().Select(n => n.Region);
         }
     }
     public sealed class LeafNode : Node
@@ -1218,8 +1308,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
         }
 
+        public override LeafNode TrimRegion(Rectangle newRegion)
+        {
+            // TODO:
+            return throw new NotImplementedException();
+        }
+
         public IEnumerable<TValue> GetEntries() => ChildrenIDs.Select(Tree.GetEntry);
-        
+
         public TValue? ValueAt(Point point) => GetEntries().FirstOrDefault(entry => entry.Location == point);
 
         public override IEnumerable<Rectangle> GetChildrenRectangles()
