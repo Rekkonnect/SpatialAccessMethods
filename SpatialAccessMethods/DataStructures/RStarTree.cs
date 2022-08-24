@@ -1128,6 +1128,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             return GetFullyLoadedNode().GetChildrenRectangles();
         }
 
+        public override IEnumerable<Rectangle> GetChildrenRectangles()
+        {
+            return GetFullyLoadedNode().GetChildrenRectangles();
+        }
+
         private Span<byte> GetDataSpan()
         {
             return Tree.TreeBufferController.LoadDataSpan(ID);
