@@ -629,9 +629,42 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
-    public IEnumerable<TValue> NearestNeighborQuery(int neighbors)
+    public IEnumerable<TValue> NearestNeighborQuery(Point point, int neighbors)
     {
-        throw new NotImplementedException("The k-nn query did not make it in time :(");
+        if (root is null)
+        {
+            return Enumerable.Empty<TValue>();
+        }
+
+        var nnHeap = new InMemory.MinHeap<NearestNeighborEntry>();
+
+        if (root is ParentNode parentRoot)
+        {
+            var children = parentRoot.GetChildren();
+            // Ascending distance from furthest rectangle vertex,
+            // which defines the shortest ball that contains at least one entire child node's rectangle
+            children.ToArray().SortBy((a, b) => a.Region.FurthestDistanceFrom(point).CompareTo(b.Region.FurthestDistanceFrom(point)));
+            // TODO: More
+        }
+        else
+        {
+            var leafRoot = root as LeafNode;
+        }
+
+        return nnHeap.ToArray().Select(e => e.Entry);
+    }
+
+    private record struct NearestNeighborEntry(TValue Entry, double Distance) : IComparable<NearestNeighborEntry>
+    {
+        public static NearestNeighborEntry FromDistance(TValue value, Point center)
+        {
+            return new(value, value.Location.DifferenceFrom(center).DistanceFromCenter);
+        }
+
+        public int CompareTo(RStarTree<TValue>.NearestNeighborEntry other)
+        {
+            return Distance.CompareTo(other.Distance);
+        }
     }
 
     public IEnumerable<TValue> RangeQuery<TShape>(TShape range)

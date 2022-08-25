@@ -170,7 +170,8 @@ public sealed class SpatialDataTable<TValue>
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
         {
-            return table.tree.NearestNeighborQuery(Neighbors);
+            // This is changed in the work shift; do not worry, just skip this file in the commit
+            return table.tree.NearestNeighborQuery(default, Neighbors);
         }
     }
     public record struct RangeQuery<TShape>(TShape Range) : IQuery
