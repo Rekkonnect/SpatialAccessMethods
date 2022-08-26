@@ -1,6 +1,6 @@
 ﻿using System.Collections;
 
-namespace SpatialAccessMethods.DataStructures;
+namespace SpatialAccessMethods.DataStructures.InMemory;
 
 public class LinkedQueueSet<T> : IEnumerable<T>
     where T : notnull

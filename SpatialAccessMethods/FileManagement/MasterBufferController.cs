@@ -1,4 +1,4 @@
-﻿using SpatialAccessMethods.DataStructures;
+﻿using SpatialAccessMethods.DataStructures.InMemory;
 using System.Collections;
 using System.Threading.Tasks.Dataflow;
 using UnitsNet;

@@ -1,26 +1,20 @@
 ﻿using Garyon.Extensions;
 using Garyon.Objects;
-using SpatialAccessMethods.FileManagement;
 using SpatialAccessMethods.Utilities;
 using System.Numerics;
-using UnitsNet;
-using UnitsNet.NumberExtensions.NumberToInformation;
 
-namespace SpatialAccessMethods.DataStructures;
+namespace SpatialAccessMethods.DataStructures.InMemory;
 
-// Although the data structure is generic, it absolutely does not guarantee block boundary safety
-// And won't be taken care of, due to not needing to, as for the purposes of this assignment, only int will be used
-public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorageDataStructure
-    where TValue : unmanaged, INumber<TValue>
+// Slightly copy-pasted from the secondary storage version
+public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>
+    where TValue : IComparable<TValue>
 {
-    public HeapEntryBufferController BufferController { get; }
-
-    ChildBufferController ISecondaryStorageDataStructure.BufferController => BufferController;
+    private readonly IComparer<TValue> comparer;
+    private readonly HeapArray contents = new();
+    private int entryCount;
 
     public abstract ComparisonResult TopNodeInequality { get; }
     public ComparisonKinds TopNodeComparisonKinds => TopNodeInequality.GetComparisonKind();
-
-    private int entryCount;
 
     public int EntryCount
     {
@@ -31,9 +25,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
                 return;
 
             entryCount = value;
-            BufferController.ResizeForEntryCount(value);
-            GetEntryCountRef(out var dataBlock) = entryCount;
-            BufferController.MarkDirty(dataBlock);
+            contents.Height = Height;
         }
     }
     public Node Root => GetNode(0);
@@ -42,17 +34,10 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
 
     public bool IsEmpty => entryCount is 0;
 
-    protected BinaryHeap(ChildBufferController bufferController)
+    protected BinaryHeap(IComparer<TValue>? comparer = null)
     {
-        BufferController = new(bufferController);
-        entryCount = GetEntryCountRef(out _);
-    }
-    
-    // WARNING: Do not leak the reference outside the calling context or it will be lost
-    private ref int GetEntryCountRef(out DataBlock dataBlock)
-    {
-        dataBlock = BufferController.LoadBlock(0);
-        return ref dataBlock.Data.Span.ValueRef<int>();
+        comparer ??= Comparer<TValue>.Default;
+        this.comparer = comparer;
     }
 
     public void Add(TValue value)
@@ -62,7 +47,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
         var node = CreateNewNode(value);
         PushUp(node);
     }
-    public TValue Pop()
+    public TValue? Pop()
     {
         if (IsEmpty)
             return default;
@@ -98,7 +83,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
     {
         return 1 << levels - 1;
     }
-    
+
     public void Clear()
     {
         EntryCount = 0;
@@ -110,7 +95,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
         {
             if (!node.HasParent)
                 return;
-            
+
             var parent = node.GetParent();
 
             bool shouldPushUp = ShouldElevate(node, parent);
@@ -160,49 +145,78 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
         return child.SatisfiesComparison(parent, TopNodeComparisonKinds | ComparisonKinds.Equal);
     }
 
-    private TValue ReadValue(int index)
+    private TValue GetValue(int index)
     {
-        var slice = SliceForIndex(index);
-        return slice.ReadValue<TValue>();
+        return contents[index];
     }
-    private void WriteValue(int index, TValue value)
+    private void SetValue(int index, TValue value)
     {
-        var slice = SliceForIndex(index, out var dataBlock);
-        slice.WriteValue(value);
-        BufferController.MarkDirty(dataBlock);
+        contents[index] = value;
     }
     private Node CreateNewNode(TValue value)
     {
-        WriteValue(entryCount - 1, value);
+        SetValue(entryCount - 1, value);
         return new(value, entryCount - 1, this);
-    }
-    private unsafe Span<byte> SliceForIndex(int index)
-    {
-        return SliceForIndex(index, out _);
-    }
-    private unsafe Span<byte> SliceForIndex(int index, out DataBlock dataBlock)
-    {
-        return BufferController.LoadDataSpan(index, out dataBlock);
     }
     public Node GetNode(int index)
     {
         if (index < 0 || index >= entryCount)
             return Node.CreateInvalid();
 
-        var value = ReadValue(index);
+        var value = GetValue(index);
         return new(value, index, this);
     }
 
-    public sealed class HeapEntryBufferController : EntryBufferController
-    {
-        protected override unsafe Information EntrySize => sizeof(TValue).Bytes();
+    public TValue[] ToArray() => contents.ToArray();
+    public List<TValue> ToList() => contents.ToList();
 
-        public override int DataOffset => sizeof(int);
-        
-        public HeapEntryBufferController(string blockFilePath, MasterBufferController masterController)
-            : base(blockFilePath, masterController) { }
-        public HeapEntryBufferController(ChildBufferController other)
-            : base(other) { }
+    private sealed class HeapArray
+    {
+        private int height;
+
+        private TValue[] contents;
+
+        public int Height
+        {
+            get => height;
+            set
+            {
+                if (height == value)
+                    return;
+
+                height = value;
+                ReallocateContentsArray();
+            }
+        }
+        public int MaxEntries => IBinaryHeap<TValue>.EntriesForHeight(Height);
+
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
+        public HeapArray()
+        {
+            ReallocateContentsArray();
+        }
+#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
+
+        private void ReallocateContentsArray()
+        {
+            var newContents = new TValue[MaxEntries];
+            contents.CopyTo(newContents.AsSpan());
+            contents = newContents;
+        }
+
+        public void SetNode(Node node)
+        {
+            this[node.Index] = node.Value;
+        }
+
+        public TValue[] ToArray() => contents.ToArray();
+        public List<TValue> ToList() => contents.ToList();
+
+        public TValue this[int index]
+        {
+            get => contents[index];
+            set => contents[index] = value;
+        }
     }
 
     public struct Node
@@ -211,7 +225,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
 
         private TValue value;
         private int index;
-        
+
         public TValue Value
         {
             get => value;
@@ -254,7 +268,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
 
         private void UpdateValueOnHeap()
         {
-            Heap.WriteValue(index, value);
+            Heap.SetValue(index, value);
         }
 
         public Node GetParent() => Heap.GetNode(ParentIndex);
@@ -271,9 +285,9 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
 
             var leftChild = GetLeftChild();
             var rightChild = GetRightChild();
-            
+
             var highest = Heap.TopNodeInequality.HighestPriorityValue(leftChild.value, rightChild.value);
-            return highest == leftChild.value ? leftChild : rightChild;
+            return highest.Equals(leftChild.value) ? leftChild : rightChild;
         }
 
         public void SwapWithParent()
@@ -287,28 +301,28 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
             other.Index = Index;
             Index = otherIndex;
         }
-        
+
         public static Node CreateInvalid()
         {
-            return new(default, -1, null!);
+            return new(default!, -1, null!);
         }
     }
 }
 
 public class MinHeap<TValue> : BinaryHeap<TValue>
-    where TValue : unmanaged, INumber<TValue>
+    where TValue : IComparable<TValue>
 {
     public override ComparisonResult TopNodeInequality => ComparisonResult.Less;
 
-    public MinHeap(ChildBufferController bufferController)
-        : base(bufferController) { }
+    public MinHeap(IComparer<TValue>? comparer = null)
+        : base(comparer) { }
 }
 
 public class MaxHeap<TValue> : BinaryHeap<TValue>
-    where TValue : unmanaged, INumber<TValue>
+    where TValue : IComparable<TValue>
 {
     public override ComparisonResult TopNodeInequality => ComparisonResult.Greater;
 
-    public MaxHeap(ChildBufferController bufferController)
-        : base(bufferController) { }
+    public MaxHeap(IComparer<TValue>? comparer = null)
+        : base(comparer) { }
 }

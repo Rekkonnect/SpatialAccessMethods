@@ -159,6 +159,47 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>
         return CreateForPoints(points);
     }
 
+    public double MinDistanceFrom(Point point)
+    {
+        // Use a new method for getting the distance from a point
+        return (ClosestVertexTo(point) - point).Absolute.DistanceFromCenter;
+    }
+
+    public Point FurthestVertexTo(Point point)
+    {
+        if (point.Rank != Rank)
+            throw new ArgumentException("The point's rank must match the rectangle's rank.");
+
+        var coordinates = new double[Rank];
+
+        for (int i = 0; i < Rank; i++)
+        {
+            coordinates[i] = FurthestVertex(MinPoint.GetCoordinate(i), MaxPoint.GetCoordinate(i), point.GetCoordinate(i));
+        }
+
+        return new(coordinates);
+    }
+    private static T FurthestVertex<T>(T min, T max, T value)
+        where T : INumber<T>
+    {
+        if (value < min)
+            return max;
+        if (value > max)
+            return min;
+
+        T distanceMin = value - min;
+        T distanceMax = max - value;
+        if (distanceMin < distanceMax)
+            return max;
+
+        return min;
+    }
+
+    public double FurthestDistanceFrom(Point point)
+    {
+        return FurthestVertexTo(point).DifferenceFrom(point).Absolute.DistanceFromCenter;
+    }
+
     public Point ClosestVertexTo(Point point)
     {
         if (point.Rank != Rank)
