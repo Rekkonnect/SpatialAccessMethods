@@ -166,11 +166,11 @@ public sealed class SpatialDataTable<TValue>
             return table.tree.SkylineQuery(DominatingExtremum);
         }
     }
-    public record struct NearestNeighborQuery(int Neighbors) : IQuery
+    public record struct NearestNeighborQuery(Point Point, int Neighbors) : IQuery
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
         {
-            return table.tree.NearestNeighborQuery(Neighbors);
+            return table.tree.NearestNeighborQuery(Point, Neighbors);
         }
     }
     public record struct RangeQuery<TShape>(TShape Range) : IQuery

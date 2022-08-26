@@ -1,8 +1,10 @@
-﻿using Garyon.Extensions;
+﻿using Garyon.DataStructures;
+using Garyon.Extensions;
 using Garyon.Objects;
 using SpatialAccessMethods.FileManagement;
 using SpatialAccessMethods.Utilities;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using UnitsNet;
 using UnitsNet.NumberExtensions.NumberToInformation;
 
@@ -67,41 +69,63 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     private void SetMaxID(int maxID) => RecordBufferController.HeaderBlock.MaxTreeNodeID = maxID;
     private int GetEntryCount() => RecordBufferController.HeaderBlock.TreeNodeCount;
 
-    public LeafNode? LeafContainingValue(TValue value)
+    public LeafNode? LeafContainingValue(Point point, out TValue? value)
     {
-        var leaf = LeafContaining(value.Location);
-        if (leaf is null)
-            return null;
+        // Get all the leafs that overlap with the requested location
+        var leafs = LeafsContaining(point);
 
-        // Further evaluate that the location is indeed contained in the leaf
-        var leafValue = leaf.ValueAt(value.Location);
-        if (leafValue?.IsValid != true)
-            return null;
+        TValue? internalValue = default;
 
+        // Identify the leaf that actually contains the given entry
+        var leaf = leafs.FirstOrDefault(leaf =>
+        {
+            var value = leaf.ValueAt(point);
+            if (value?.IsValid != true)
+                return false;
+
+            internalValue = value;
+            return true;
+        });
+
+        value = internalValue;
         return leaf;
     }
-    public LeafNode? LeafContaining(Point point)
+    public LeafNode? LeafContainingValue(TValue value)
     {
-        var current = root;
-        while (current is not null)
+        return LeafContainingValue(value.Location, out _);
+    }
+    public IEnumerable<LeafNode> LeafsContaining(Point point)
+    {
+        if (root is null)
+            yield break;
+
+        var queue = new Queue<Node>();
+        queue.Enqueue(root);
+        while (queue.Count > 0)
         {
+            var current = queue.Dequeue();
             if (current is LeafNode leaf)
-                return leaf;
+                yield return leaf;
 
             var currentParent = current as ParentNode;
-            var child = currentParent!.ChildContaining(point);
-            current = child;
+            var children = currentParent!.ChildrenContaining(point);
+            queue.EnqueueRange(children);
         }
-
-        return null;
     }
     public TValue? GetValue(Point point)
     {
-        var leaf = LeafContaining(point);
-        if (leaf is null)
+        var leafs = LeafsContaining(point);
+        if (leafs is null)
             return default;
 
-        return leaf.ValueAt(point);
+        foreach (var leaf in leafs)
+        {
+            var value = leaf.ValueAt(point);
+            if (value?.IsValid == true)
+                return value;
+        }
+
+        return default;
     }
 
     public void Clear()
@@ -111,13 +135,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         serialIDHandler.Clear();
     }
 
-    private LeafNode ChooseLeaf(Point point)
+    private LeafNode? ChooseLeaf(Point point)
     {
-        var leaf = LeafContaining(point);
-        if (leaf is not null)
-            return leaf;
-
-        return null;
+        return LeafsContaining(point).FirstOrDefault();
     }
 
     private LeafNode ChooseSubtree(TValue entry)
@@ -140,7 +160,142 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
-    private void Split(Node node)
+    private void ReInsert(int level, Node node)
+    {
+        const double removedChildrenRate = 0.30; // as the paper suggests
+
+        // We assume that node contains M+1 entries;
+        // which is allowed outside the context of serialization
+
+        switch (node)
+        {
+            // Copy-paste go!
+            case LeafNode leaf:
+            {
+                var entries = leaf.GetEntries().ToArray();
+                // Ascending
+                var distances = entries
+                    .Select(e => EntryDistance.FromDistance(e, node.Region))
+                    .ToArray()
+                    .SortBy((a, b) => a.Distance.CompareTo(b.Distance));
+
+                int removedCount = (int)(removedChildrenRate * distances.Length);
+                int newEntryTotal = distances.Length - removedCount;
+                var removedDistances = distances[newEntryTotal..];
+
+                // Remove the children IDs that are filtered out
+                node.ChildrenIDs.ExceptWith(removedDistances.Select(d => d.Entry.ID));
+
+                foreach (var distance in removedDistances)
+                {
+                    Insert(distance.Entry);
+                }
+                break;
+            }
+
+            case ParentNode parent:
+            {
+                var children = parent.GetChildren().ToArray();
+                // Ascending
+                var distances = children
+                    .Select(child => NodeDistance.FromDistance(child, node.Region))
+                    .ToArray()
+                    .SortBy((a, b) => a.Distance.CompareTo(b.Distance));
+
+                int removedCount = (int)(removedChildrenRate * distances.Length);
+                int newEntryTotal = distances.Length - removedCount;
+                var removedDistances = distances[newEntryTotal..];
+
+                // Remove the children IDs that are filtered out
+                node.ChildrenIDs.ExceptWith(removedDistances.Select(d => d.Node.ID));
+
+                foreach (var distance in removedDistances)
+                {
+                    // level + 1?
+                    Insert(level, distance.Node);
+                }
+
+                break;
+            }
+        }
+    }
+
+    private record struct NodeDistance(Node Node, double Distance)
+    {
+        public static NodeDistance FromDistance(Node node, Rectangle rectangle)
+        {
+            var distance = rectangle.Center.DistanceFrom(node.Region.Center);
+            return new(node, distance);
+        }
+    }
+
+    private record struct EntryDistance(TValue Entry, double Distance)
+    {
+        public static EntryDistance FromDistance(TValue value, Rectangle rectangle)
+        {
+            var distance = rectangle.Center.DistanceFrom(value.Location);
+            return new(value, distance);
+        }
+    }
+
+    private void OverflowTreatment(object operationReference, int level, Node node)
+    {
+        var stats = OverflowTreatmentStats.ForInstance(operationReference);
+        stats.RecordInvocation(level);
+        if (level > 0 && stats.CounterAtLevel(level) <= 1)
+        {
+            ReInsert(level, node);
+        }
+        else
+        {
+            Split(level, node);
+        }
+    }
+
+    private class OverflowTreatmentStats : IDisposable
+    {
+        private static readonly Dictionary<object, OverflowTreatmentStats> statsMap = new();
+
+        public static OverflowTreatmentStats ForInstance(object reference)
+        {
+            statsMap.TryGetValue(reference, out var stats);
+            if (stats is null)
+            {
+                stats = new(reference);
+                statsMap[reference] = stats;
+            }
+            return stats;
+        }
+
+        private readonly object reference;
+
+        private readonly ValueCounterDictionary<int> levelCounters = new();
+
+        private OverflowTreatmentStats(object reference)
+        {
+            this.reference = reference;
+        }
+        ~OverflowTreatmentStats()
+        {
+            Dispose();
+        }
+
+        public void RecordInvocation(int level)
+        {
+            levelCounters[level]++;
+        }
+        public int CounterAtLevel(int level)
+        {
+            return levelCounters[level];
+        }
+
+        public void Dispose()
+        {
+            statsMap.Remove(reference);
+        }
+    }
+
+    private void Split(int level, Node node)
     {
         var d30 = AttemptSplit(0.30);
         var d40 = AttemptSplit(0.40);
@@ -149,11 +304,10 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         if (d30.OverlapValue < d40.OverlapValue)
             splitDistribution = d30;
 
-        {
-            var newCurrentRegion = splitDistribution.LeftMBR;
-            // We don't care about the right MBR
-        }
-        // TODO: Create the new split nodes
+        // We don't care about the right MBR
+        var newCurrentRegion = splitDistribution.LeftMBR;
+        var newNode = node.TrimRegion(newCurrentRegion);
+        // TODO - Insert the new node
 
         RectangleDistribution AttemptSplit(double maxOrderRate)
         {
@@ -386,6 +540,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         return a.Margin + b.Margin;
     }
 
+    private void Insert(int level, Node node)
+    {
+        // This presumably does something
+    }
+
     public void Insert(TValue value)
     {
         if (root is null)
@@ -408,17 +567,56 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     public bool Remove(Point point)
     {
-        var leaf = LeafContaining(point);
+        var leaf = LeafContainingValue(point, out var value);
+
         if (leaf is null)
             return false;
 
-        // TODO
+        bool removed = leaf.ChildrenIDs.Remove(value!.ID);
+        Debug.Assert(removed);
+
+        CondenseTree(leaf);
+        
         return true;
 
     }
     public bool Remove(TValue value)
     {
         return Remove(value.Location);
+    }
+
+    private void CondenseTree(LeafNode leaf)
+    {
+        if (!leaf.ShouldMerge)
+            return;
+
+        // Merging is the same operation as in R-tree
+        Node currentNode = leaf;
+        var eliminated = new List<Node>();
+
+        while (true)
+        {
+            if (currentNode.IsRoot)
+                break;
+
+            // Non-root nodes definitely have a parent                                         famous last words
+            var parent = currentNode.GetParent()!;
+
+            if (currentNode.ShouldMerge)
+            {
+                parent.ChildrenIDs.Remove(currentNode.ID);
+                eliminated.Add(currentNode);
+            }
+            else
+            {
+                currentNode.RefreshMBR();
+            }
+        }
+
+        foreach (var eliminatedNode in eliminated)
+        {
+            // TODO
+        }
     }
 
     public int GetHeightForEntryCount(int entryCount)
@@ -558,7 +756,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                     var children = parent!.GetChildren();
                     var dominatingNodes = DominatingNodes(children);
                     foreach (var child in dominatingNodes)
-                        nodeQueue.Enqueue(child, child.Region.AsboluteExtremumDistanceFrom(origin, dominatingExtremum));
+                        nodeQueue.Enqueue(child, child.Region.AbsoluteExtremumDistanceFrom(origin, dominatingExtremum));
                 }
             }
             else
@@ -629,8 +827,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
-    public IEnumerable<TValue> NearestNeighborQuery(int neighbors)
+    public IEnumerable<TValue> NearestNeighborQuery(Point point, int neighbors)
     {
+        if (point.Rank != Dimensionality)
+            throw new InvalidOperationException("The given point's rank must match that of the contained entries'.");
+
         throw new NotImplementedException("The k-nn query did not make it in time :(");
     }
 
@@ -692,6 +893,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             case ParentNode parent:
                 foreach (var child in parent.GetChildren())
                 {
+                    if (child.IsRoot)
+                        return false;
+
                     bool contained = parent.Region.Contains(child.Region, true);
                     if (!contained)
                         return false;
@@ -709,7 +913,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                     if (!contained)
                         return false;
                 }
-                return VerifyIntegrity(leaf);
+                return true;
                 
                 // Unexpected node type
             default:
@@ -784,6 +988,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         return IRecordSerializable<TValue>.Parse(entrySpan, RecordBufferController.HeaderBlock, id);
     }
 
+    private LeafNode AllocateNewLeafNode(int parentID, IEnumerable<int> childrenIDs, Rectangle region)
+    {
+        int newID = AllocateNextID();
+        return new LeafNode(this, newID, parentID, childrenIDs, region);
+    }
+    private ParentNode AllocateNewParentNode(int parentID, IEnumerable<int> childrenIDs, Rectangle region)
+    {
+        int newID = AllocateNextID();
+        return new ParentNode(this, newID, parentID, childrenIDs, region);
+    }
+
+    internal delegate TNode NewNodeAllocator<TNode>(int parentID, IEnumerable<int> childrenIDs, Rectangle region)
+        where TNode : Node; 
+
     // Ref-able properties would be healthy here
     private int AllocateNextID()
     {
@@ -819,17 +1037,23 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
-    public abstract class Node
+    public abstract class Node : IID
     {
-        protected SortedSet<int> ChildrenIDs;
+        protected internal SortedSet<int> ChildrenIDs;
         
         public RStarTree<TValue> Tree { get; }
 
-        public virtual Rectangle Region { get; private set; }
+        public virtual Rectangle Region { get; protected set; }
 
         public abstract NodeType NodeType { get; }
 
         public bool WriteUponDestruction { get; set; } = true;
+
+        int IID.ID
+        {
+            get => ID;
+            set => throw null!;
+        }
 
         public int ID { get; }
         public NodeID ParentID { get; set; }
@@ -925,6 +1149,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
 
         public abstract IEnumerable<Rectangle> GetChildrenRectangles();
+
+        public abstract void RefreshMBR();
 
         public abstract Node TrimRegion(Rectangle newRegion);
 
@@ -1037,6 +1263,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             };
         }
 
+        private protected TNode TrimRegion<TChildren, TNode>(Rectangle newRegion, Func<IEnumerable<TChildren>> childrenRetriever, Predicate<TChildren> childrenPredicate, NewNodeAllocator<TNode> allocator)
+            where TChildren : IID
+            where TNode : Node
+        {
+            var children = childrenRetriever();
+            children.Dissect(childrenPredicate, out var inside, out var outside);
+            // Locally cache the values
+            inside = inside.ToList(ChildrenCount);
+            outside = outside.ToList(ChildrenCount);
+
+            ChildrenIDs = new(inside.Select(c => c.ID));
+            return allocator(ParentID, outside.Select(c => c.ID), newRegion);
+        }
+
         private static class ChildrenIDArrayPool
         {
             // 62 - 2n,
@@ -1133,6 +1373,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             return Tree.TreeBufferController.LoadDataSpan(ID);
         }
 
+        public override void RefreshMBR()
+        {
+            GetFullyLoadedNode().RefreshMBR();
+        }
+
         public override Node TrimRegion(Rectangle newRegion)
         {
             throw new InvalidOperationException("The lazy node should not be able to be trimmed.");
@@ -1221,16 +1466,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public IEnumerable<Node> GetChildren() => ChildrenIDs.Select(Tree.GetNode) as IEnumerable<Node>;
 
-        public override ParentNode TrimRegion(Rectangle newRegion)
+        public override void RefreshMBR()
         {
             var children = GetChildren();
-            children.Dissect(child => newRegion.Contains(child.Region), out var inside, out var outside);
-            // Locally cache the values
-            inside = inside.ToList(ChildrenCount);
-            outside = outside.ToList(ChildrenCount);
+            Region = Rectangle.CreateForRectangles(children.Select(e => e.Region).ToArray());
+        }
 
-            ChildrenIDs = new(inside.Select(c => c.ID));
-            return new ParentNode(Tree, NodeID.Null, ParentID, outside.Select(c => c.ID), newRegion);
+        public override ParentNode TrimRegion(Rectangle newRegion)
+        {
+            return TrimRegion(newRegion, GetChildren, ChildrenPredicate, Tree.AllocateNewParentNode);
+
+            bool ChildrenPredicate(Node child)
+            {
+                return newRegion.Contains(child.Region);
+            }
         }
 
         public bool IsParentOf(Node child) => child.ParentID == ID;
@@ -1259,9 +1508,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             return totalOverlap;
         }
 
-        public Node? ChildContaining(Point point)
+        public IEnumerable<Node> ChildrenContaining(Point point)
         {
-            return GetLazyChildren().FirstOrDefault(child => child.Region.Contains(point, true));
+            return GetLazyChildren().Where(child => child.Region.Contains(point, true));
         }
 
         public void NotifyChildrenParenthood()
@@ -1300,16 +1549,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
         }
 
-        public override LeafNode TrimRegion(Rectangle newRegion)
+        public override void RefreshMBR()
         {
             var entries = GetEntries();
-            entries.Dissect(entry => newRegion.Contains(entry.Location), out var inside, out var outside);
-            // Locally cache the values
-            inside = inside.ToList(ChildrenCount);
-            outside = outside.ToList(ChildrenCount);
+            Region = Rectangle.CreateForPoints(entries.Select(e => e.Location).ToArray());
+        }
 
-            ChildrenIDs = new(inside.Select(c => c.ID));
-            return new LeafNode(Tree, NodeID.Null, ParentID, outside.Select(c => c.ID), newRegion);
+        public override LeafNode TrimRegion(Rectangle newRegion)
+        {
+            return TrimRegion(newRegion, GetEntries, ChildrenPredicate, Tree.AllocateNewLeafNode);
+
+            bool ChildrenPredicate(TValue entry)
+            {
+                return newRegion.Contains(entry.Location);
+            }
         }
 
         public IEnumerable<TValue> GetEntries() => ChildrenIDs.Select(Tree.GetEntry);

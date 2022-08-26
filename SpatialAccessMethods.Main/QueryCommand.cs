@@ -1,5 +1,6 @@
 ﻿using ManyConsole;
 using SpatialAccessMethods.FileManagement;
+using System.Text.RegularExpressions;
 
 namespace SpatialAccessMethods.Main;
 
@@ -35,5 +36,23 @@ public abstract class QueryCommand : ConsoleCommand
         }
 
         return 0;
+    }
+
+    private static readonly Regex pointFormat = new(@"\((?'coordinates'.*)\)");
+
+    protected static Point ParsePoint(string argument)
+    {
+        // Normalize whitespace
+        argument = argument.Replace(" ", "");
+
+        var match = pointFormat.Match(argument);
+        var coordinates = ParseCoordinates(match);
+
+        return new Point(coordinates);
+
+        static double[] ParseCoordinates(Match match)
+        {
+            return match.Groups["coordinates"].Value.Split(',').Select(double.Parse).ToArray();
+        }
     }
 }

@@ -80,6 +80,11 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
         return new Point(difference);
     }
 
+    public double DistanceFrom(Point other)
+    {
+        return DifferenceFrom(other).DistanceFromCenter;
+    }
+
     /// <summary>Gets the Manhattan distance from another point.</summary>
     /// <param name="other">The other point to get the Manhattan distance from.</param>
     /// <returns>The Manhattan distance from the other point, where each of the coordinates is the absolute value of the distance.</returns>

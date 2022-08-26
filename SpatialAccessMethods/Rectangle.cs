@@ -51,7 +51,7 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>
         var subordinatePoint = other.ExtremumPoint(subordinateExtremum);
         return dominatingPoint.ResolveDomination(subordinatePoint, dominatingExtremum);
     }
-    public double AsboluteExtremumDistanceFrom(Point origin, Extremum extremum)
+    public double AbsoluteExtremumDistanceFrom(Point origin, Extremum extremum)
     {
         return ExtremumPoint(extremum).ManhattanDistanceFrom(origin);
     }
@@ -335,6 +335,6 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>
             return GetDistanceFromOrigin(x).CompareTo(GetDistanceFromOrigin(y));
         }
 
-        private double GetDistanceFromOrigin(Rectangle rectangle) => rectangle.AsboluteExtremumDistanceFrom(Origin, Extremum);
+        private double GetDistanceFromOrigin(Rectangle rectangle) => rectangle.AbsoluteExtremumDistanceFrom(Origin, Extremum);
     }
 }
