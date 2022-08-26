@@ -63,6 +63,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             MaxIDAccessors = new(GetMaxID, SetMaxID),
             EntryCountGetter = GetEntryCount,
+            ValidIDPredicate = IsValidNode,
         };
     }
 
@@ -526,7 +527,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             }
         }
     }
-#nullable enable
+#nullable restore
 
     private static double OverlapValue(Rectangle a, Rectangle b)
     {
@@ -579,7 +580,6 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         CondenseTree(leaf);
         
         return true;
-
     }
     public bool Remove(TValue value)
     {
@@ -593,7 +593,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         // Merging is the same operation as in R-tree
         Node currentNode = leaf;
-        var eliminated = new List<Node>();
+        var eliminatedNodes = new List<Node>();
 
         while (true)
         {
@@ -606,17 +606,40 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             if (currentNode.ShouldMerge)
             {
                 parent.ChildrenIDs.Remove(currentNode.ID);
-                eliminated.Add(currentNode);
+                eliminatedNodes.Add(currentNode);
             }
             else
             {
                 currentNode.RefreshMBR();
             }
+
+            currentNode = parent;
         }
 
-        foreach (var eliminatedNode in eliminated)
+        foreach (var eliminatedNode in eliminatedNodes)
         {
-            // TODO
+            if (eliminatedNode is LeafNode eliminatedLeaf)
+            {
+                // Reinsert all leaf node entries
+                var entries = eliminatedLeaf.GetEntries();
+                foreach (var entry in entries)
+                    Insert(entry);
+            }
+            else
+            {
+                // Reinsert the parent nodes to their respective levels
+                var eliminatedParent = eliminatedNode as ParentNode;
+                var childrenNodes = eliminatedParent!.GetChildren();
+                foreach (var childNode in childrenNodes)
+                {
+                    // Reinsert the child node at the same level
+                    // Find the best subtree to inlcude the new node in
+                    // If this function does not suit; it should be another
+                    Insert(childNode.GetLevel(), childNode);
+                }
+            }
+
+            serialIDHandler.DeallocateID(TreeBufferController, eliminatedNode.ID);
         }
     }
 
@@ -828,6 +851,38 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
+    private IEnumerable<LeafNode> GetAllLeafs()
+    {
+        if (root is null)
+            return Enumerable.Empty<LeafNode>();
+
+        if (root is LeafNode leaf)
+            return new[] { leaf };
+
+        return GetAllLeafs((root as ParentNode)!);
+    }
+    private IEnumerable<LeafNode> GetAllLeafs(ParentNode node)
+    {
+        // That is not funny
+        var children = node.GetChildren().ToArray();
+
+        foreach (var child in children)
+        {
+            if (child is LeafNode leaf)
+            {
+                yield return leaf;
+            }
+            else
+            {
+                var childLeafs = GetAllLeafs((child as ParentNode)!);
+                foreach (var childLeaf in childLeafs)
+                {
+                    yield return childLeaf;
+                }
+            }
+        }
+    }
+
     public IEnumerable<TValue> NearestNeighborQuery(Point point, int neighbors)
     {
         if (point.Rank != Dimensionality)
@@ -838,14 +893,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             return Enumerable.Empty<TValue>();
         }
 
+        if (neighbors >= GetEntryCount())
+        {
+            // The query is expensive anyway; at least the greater cost still remains in the IO
+            return GetAllLeafs().SelectMany(l => l.GetEntries());
+        }
+
         var nnHeap = new InMemory.MinHeap<NearestNeighborEntry>();
 
         if (root is ParentNode parentRoot)
         {
-            var children = parentRoot.GetChildren();
+            var children = parentRoot.GetChildren().ToArray();
             // Ascending distance from furthest rectangle vertex,
             // which defines the shortest ball that contains at least one entire child node's rectangle
-            children.ToArray().SortBy((a, b) => a.Region.FurthestDistanceFrom(point).CompareTo(b.Region.FurthestDistanceFrom(point)));
+            children.SortBy((a, b) => a.Region.FurthestDistanceFrom(point).CompareTo(b.Region.FurthestDistanceFrom(point)));
             // TODO: More
         }
         else
@@ -1144,6 +1205,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             return Tree.TreeBufferController.LoadDataSpan(ID, out dataBlock);
         }
 
+        public LazyNode? GetLazyParent()
+        {
+            if (ParentID.IsNull)
+                return null;
+
+            return Tree.GetLazyNode(ParentID);
+        }
+
         public ParentNode? GetParent()
         {
             if (ParentID.IsNull)
@@ -1309,6 +1378,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
             ChildrenIDs = new(inside.Select(c => c.ID));
             return allocator(ParentID, outside.Select(c => c.ID), newRegion);
+        }
+
+        public int GetLevel()
+        {
+            int level = 0;
+            var current = this;
+            while (true)
+            {
+                var parent = current.GetLazyParent();
+                if (parent is null)
+                    break;
+                current = parent;
+            }
+            return level;
         }
 
         private static class ChildrenIDArrayPool

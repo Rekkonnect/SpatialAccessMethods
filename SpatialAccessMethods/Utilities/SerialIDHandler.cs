@@ -9,6 +9,7 @@ public class SerialIDHandler
 
     public PropertyDelegates<int>? MaxIDAccessors { get; init; }
     public Func<int>? EntryCountGetter { get; init; }
+    public Predicate<int>? ValidIDPredicate { get; init; }
 
     public SerialIDHandler(MinHeap<int> idGapHeap)
     {
@@ -31,7 +32,7 @@ public class SerialIDHandler
         incrementedMaxID = false;
         return idGapHeap.Pop();
     }
-    public int AllocateNextID(ref int maxID, EntryBufferController entryBufferController, out bool incrementedMaxID)
+    private int AllocateNextID(ref int maxID, EntryBufferController entryBufferController, out bool incrementedMaxID)
     {
         int nextID = AllocateNextID(ref maxID, out incrementedMaxID);
         if (incrementedMaxID)
@@ -42,16 +43,26 @@ public class SerialIDHandler
 
     public int AllocateNextID(EntryBufferController entryBufferController)
     {
-        int maxID = MaxIDAccessors!.Getter();
+        int maxID = GetMaxID();
         int nextID = AllocateNextID(ref maxID, entryBufferController, out bool incrementedMaxID);
 
         if (incrementedMaxID)
-            MaxIDAccessors.Setter(maxID);
+            SetMaxID(maxID);
 
         return nextID;
     }
 
-    public int CurrentGapCount() => MaxIDAccessors!.Getter() - EntryCountGetter!();
+    public void DeallocateID(EntryBufferController entryBufferController, int id)
+    {
+        int maxID = GetMaxID();
+        if (id == maxID)
+        {
+            maxID = ScanAssignPreviousMaxID();
+        }
+        entryBufferController.ResizeForEntryCount(maxID);
+    }
+
+    public int CurrentGapCount() => GetMaxID() - GetEntryCount();
 
     public void PreserveMaxCapableIDGaps()
     {
@@ -63,11 +74,12 @@ public class SerialIDHandler
         idGapHeap.PreserveMaxEntryCount(maxGaps);
     }
 
-    public int ScanAssignPreviousMaxID(Predicate<int> validID)
+    public int ScanAssignPreviousMaxID(Predicate<int>? validID = null)
     {
-        int max = MaxIDAccessors!.Getter();
+        validID ??= ValidIDPredicate!;
+        int max = GetMaxID();
         FindPreviousMaxID(ref max, validID);
-        MaxIDAccessors.Setter(max);
+        SetMaxID(max);
         return max;
     }
 
@@ -76,7 +88,11 @@ public class SerialIDHandler
         idGapHeap.Clear();
     }
 
-    public static int FindPreviousMaxID(ref int max, Predicate<int> validID)
+    private int GetEntryCount() => EntryCountGetter!();
+    private int GetMaxID() => MaxIDAccessors!.Getter();
+    private void SetMaxID(int maxID) => MaxIDAccessors!.Setter(maxID);
+
+    private static int FindPreviousMaxID(ref int max, Predicate<int> validID)
     {
         while (true)
         {

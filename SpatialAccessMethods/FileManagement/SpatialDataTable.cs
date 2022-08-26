@@ -29,6 +29,7 @@ public sealed class SpatialDataTable<TValue>
         {
             MaxIDAccessors = new(GetMaxID, SetMaxID),
             EntryCountGetter = GetEntryCount,
+            ValidIDPredicate = IsValidEntry,
         };
     }
 

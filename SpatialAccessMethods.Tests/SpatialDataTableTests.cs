@@ -7,7 +7,9 @@ namespace SpatialAccessMethods.Tests;
 
 public class SpatialDataTableTests : FileManagementTestContainer
 {
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     private SpatialDataTable<MapRecordEntry> table;
+#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     private RecordEntryBufferController entryBufferController;
     private ChildBufferController treeBufferController;
     private MinHeap<int> recordIDHeap, treeIDHeap;
