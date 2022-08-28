@@ -1,14 +1,16 @@
 ﻿using Garyon.Extensions;
 using Garyon.Objects;
 using SpatialAccessMethods.Utilities;
+using System.Collections;
 using System.Numerics;
 
 namespace SpatialAccessMethods.DataStructures.InMemory;
 
 // Slightly copy-pasted from the secondary storage version
-public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>
+public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TValue>
     where TValue : IComparable<TValue>
 {
+    // The comparer is not currently used, but could be in the future
     private readonly IComparer<TValue> comparer;
     private readonly HeapArray contents = new();
     private int entryCount;
@@ -167,10 +169,10 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>
         return new(value, index, this);
     }
 
-    public TValue[] ToArray() => contents.ToArray();
-    public List<TValue> ToList() => contents.ToList();
+    public IEnumerator<TValue> GetEnumerator() => contents.GetEnumerator();
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    private sealed class HeapArray
+    private sealed class HeapArray : IEnumerable<TValue>
     {
         private int height;
 
@@ -209,8 +211,12 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>
             this[node.Index] = node.Value;
         }
 
-        public TValue[] ToArray() => contents.ToArray();
-        public List<TValue> ToList() => contents.ToList();
+        public IEnumerator<TValue> GetEnumerator()
+        {
+            // .NET remind me why the fuck this is a thing
+            return ((IEnumerable<TValue>)contents).GetEnumerator();
+        }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
         public TValue this[int index]
         {

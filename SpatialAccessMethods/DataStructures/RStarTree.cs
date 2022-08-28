@@ -51,6 +51,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     public int MinChildren => (Order + 1) / 2;
     public int MaxChildren => Order;
 
+    public int Height => GetHeightForEntryCount(GetEntryCount());
+
     public RStarTree(int order, ChildBufferController treeBufferController, RecordEntryBufferController recordBufferController, MinHeap<int> idGapHeap)
     {
         Order = order;
@@ -907,14 +909,63 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             // Ascending distance from furthest rectangle vertex,
             // which defines the shortest ball that contains at least one entire child node's rectangle
             children.SortBy((a, b) => a.Region.FurthestDistanceFrom(point).CompareTo(b.Region.FurthestDistanceFrom(point)));
-            // TODO: More
+
+            int currentLevel1Index = 0;
+
+            Ball searchBall;
+            int maxCurrentNodes = 0;
+            // Keep increasing the ball's radius until there is chance it covers the requested neighbor count
+            do
+            {
+                ExpandCurrentSearchBall();
+            }
+            while (maxCurrentNodes < neighbors);
+
+            // Currently, this will cause full reiteration of all the nodes if the ball is expanded
+            // there must be a safer mechanism for minimizing the possibility of increasing the ball
+            // Perhaps adjust the algorithm so that the ball is the max possible of the neighbors
+            // That way, the nodes will be stored in a priority queue based on their max distance from the center
+            // And then they can be eliminated completely once they're out of range of the max in the min heap
+            // Note: adjust the min heap!!!
+
+            // Iterate through all the children nodes and find all the entries inside the leaf nodes
+            // Only add entries to the heap until the requested neighbor count
+            // The heap should contain methods for keeping the other extremum
+            // Additionally, preservation of a maximum count
+
+            void ExpandCurrentSearchBall()
+            {
+                // Sanity check
+                if (currentLevel1Index >= Order - 1)
+                    return;
+
+                searchBall = GetForCurrentLevel1Index();
+                AdvanceLevel1IndexCoveringCurrentBall();
+                maxCurrentNodes = (int)Math.Pow(Order, Height) * currentLevel1Index;
+            }
+            Ball GetForCurrentLevel1Index()
+            {
+                return new Ball(point, children[currentLevel1Index].Region.FurthestDistanceFrom(point));
+            }
+            void AdvanceLevel1IndexCoveringCurrentBall()
+            {
+                while (searchBall.Overlaps(children[currentLevel1Index].Region))
+                {
+                    currentLevel1Index++;
+                }
+            }
         }
         else
         {
             var leafRoot = root as LeafNode;
+            // TODO: More
         }
 
-        return nnHeap.ToArray().Select(e => e.Entry);
+        // The root cases could be handled in a separate function perhaps
+        // This function makes so much sense in my brain I wonder if it's the one
+        // in the paper
+
+        return nnHeap.Select(e => e.Entry);
     }
 
     private record struct NearestNeighborEntry(TValue Entry, double Distance) : IComparable<NearestNeighborEntry>
