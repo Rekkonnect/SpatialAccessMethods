@@ -10,7 +10,6 @@ namespace SpatialAccessMethods.DataStructures.InMemory;
 public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TValue>
     where TValue : IComparable<TValue>
 {
-    // The comparer is not currently used, but could be in the future
     private readonly IComparer<TValue> comparer;
     private readonly HeapArray contents = new();
     private int entryCount;
@@ -36,6 +35,16 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
 
     public bool IsEmpty => entryCount is 0;
 
+    /// <summary>
+    /// Gets the lowest priority value, which is the value furthest away from being the top node.
+    /// Specifically, in the max heap, this reflects the min value, whereas for the min heap, this reflects the max value.
+    /// </summary>
+    /// <remarks>
+    /// It is always assumed that the values do not dynamically change through the <seealso cref="Node"/> instances.
+    /// In such scenarios, there is low but existing chance this is outdated, just like the general heap structure.
+    /// </remarks>
+    public TValue? LowestPriorityValue { get; private set; }
+
     protected BinaryHeap(IComparer<TValue>? comparer = null)
     {
         comparer ??= Comparer<TValue>.Default;
@@ -44,6 +53,8 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
 
     public void Add(TValue value)
     {
+        EvaluateNewlyAddedLowestPriorityValue(value);
+
         EntryCount++;
 
         var node = CreateNewNode(value);
@@ -62,7 +73,52 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
 
         EntryCount--;
 
+        EvaluatePoppedLowestPriorityValue();
+
         return poppedValue;
+    }
+
+    private void EvaluateNewlyAddedLowestPriorityValue(TValue newValue)
+    {
+        if (IsEmpty || HigherOrEqualPriority(newValue, LowestPriorityValue!))
+            LowestPriorityValue = newValue;
+    }
+
+    // Only in the case that the popped element is the last in the heap will the lowest
+    // priority value be changed; and in this instance there is no other to replace it
+    private void EvaluatePoppedLowestPriorityValue()
+    {
+        if (IsEmpty)
+            LowestPriorityValue = default;
+    }
+
+    // This is an O(n) operation, despite being overall optimal in other aspects of the data structure
+    private void IterateLowestPriorityValuesFinalLevel()
+    {
+        switch (entryCount)
+        {
+            case 0:
+                LowestPriorityValue = default;
+                return;
+            case 1:
+                LowestPriorityValue = contents[0];
+                return;
+        }
+
+        int endIndex = entryCount - 1;
+        // Only the next parent is going to have values of lower priority
+        int startIndex = GetNode(endIndex).ParentIndex + 1;
+
+        // Reset and base on that
+        LowestPriorityValue = contents[0];
+        for (int index = startIndex; index <= endIndex; index++)
+        {
+            var current = contents[index];
+            if (HigherOrEqualPriority(current, LowestPriorityValue))
+            {
+                LowestPriorityValue = current;
+            }
+        }
     }
 
     public void PreserveMaxEntryCount(int maxEntryCount)
@@ -72,13 +128,13 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
 
         // This will automatically trim away the last levels
         EntryCount = maxEntryCount;
+        IterateLowestPriorityValuesFinalLevel();
     }
 
-    // This is unnecessary, given the presence of the above method
     public void EliminateLastLevel()
     {
         int targetLevel = Height - 1;
-        EntryCount = MaxEntriesForHeap(targetLevel);
+        PreserveMaxEntryCount(MaxEntriesForHeap(targetLevel));
     }
 
     private static int MaxEntriesForHeap(int levels)
@@ -89,6 +145,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
     public void Clear()
     {
         EntryCount = 0;
+        LowestPriorityValue = default;
     }
 
     private void PushUp(Node node)
@@ -140,11 +197,11 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
     }
     private bool ShouldElevate(TValue child, TValue parent)
     {
-        return child.SatisfiesComparison(parent, TopNodeComparisonKinds);
+        return comparer.SatisfiesComparison(child, parent, TopNodeComparisonKinds);
     }
-    private bool HigherOrEqualHierarchy(TValue child, TValue parent)
+    private bool HigherOrEqualPriority(TValue candidate, TValue baseline)
     {
-        return child.SatisfiesComparison(parent, TopNodeComparisonKinds | ComparisonKinds.Equal);
+        return comparer.SatisfiesComparison(candidate, baseline, TopNodeComparisonKinds | ComparisonKinds.Equal);
     }
 
     private TValue GetValue(int index)
@@ -320,6 +377,8 @@ public class MinHeap<TValue> : BinaryHeap<TValue>
 {
     public override ComparisonResult TopNodeInequality => ComparisonResult.Less;
 
+    public TValue? MaxValue => LowestPriorityValue;
+
     public MinHeap(IComparer<TValue>? comparer = null)
         : base(comparer) { }
 }
@@ -328,6 +387,8 @@ public class MaxHeap<TValue> : BinaryHeap<TValue>
     where TValue : IComparable<TValue>
 {
     public override ComparisonResult TopNodeInequality => ComparisonResult.Greater;
+
+    public TValue? MinValue => LowestPriorityValue;
 
     public MaxHeap(IComparer<TValue>? comparer = null)
         : base(comparer) { }

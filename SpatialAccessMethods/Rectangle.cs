@@ -195,9 +195,16 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>
         return min;
     }
 
-    public double FurthestDistanceFrom(Point point)
+    public double LargestDistanceFrom(Point point)
     {
-        return FurthestVertexTo(point).DifferenceFrom(point).Absolute.DistanceFromCenter;
+        return FurthestVertexTo(point).DistanceFrom(point);
+    }
+    public double ShortestDistanceFrom(Point point)
+    {
+        if (Contains(point))
+            return 0;
+
+        return ClosestVertexTo(point).DistanceFrom(point);
     }
 
     public Point ClosestVertexTo(Point point)

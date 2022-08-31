@@ -82,7 +82,7 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
 
     public double DistanceFrom(Point other)
     {
-        return DifferenceFrom(other).DistanceFromCenter;
+        return DifferenceFrom(other).Absolute.DistanceFromCenter;
     }
 
     /// <summary>Gets the Manhattan distance from another point.</summary>

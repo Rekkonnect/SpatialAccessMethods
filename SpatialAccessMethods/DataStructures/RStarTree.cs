@@ -908,7 +908,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             var children = parentRoot.GetChildren().ToArray();
             // Ascending distance from furthest rectangle vertex,
             // which defines the shortest ball that contains at least one entire child node's rectangle
-            children.SortBy((a, b) => a.Region.FurthestDistanceFrom(point).CompareTo(b.Region.FurthestDistanceFrom(point)));
+            children.SortBy((a, b) => a.Region.LargestDistanceFrom(point).CompareTo(b.Region.LargestDistanceFrom(point)));
 
             int currentLevel1Index = 0;
 
@@ -924,9 +924,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             // Currently, this will cause full reiteration of all the nodes if the ball is expanded
             // there must be a safer mechanism for minimizing the possibility of increasing the ball
             // Perhaps adjust the algorithm so that the ball is the max possible of the neighbors
-            // That way, the nodes will be stored in a priority queue based on their max distance from the center
+            // That way, the nodes will be stored in a priority queue based on their shortest distance from the focal point
             // And then they can be eliminated completely once they're out of range of the max in the min heap
-            // Note: adjust the min heap!!!
+            // Make sure to delay heap trimming by the most possible, in order to reduce the O(n) iterations that have to be performed
 
             // Iterate through all the children nodes and find all the entries inside the leaf nodes
             // Only add entries to the heap until the requested neighbor count
@@ -945,7 +945,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             }
             Ball GetForCurrentLevel1Index()
             {
-                return new Ball(point, children[currentLevel1Index].Region.FurthestDistanceFrom(point));
+                return new Ball(point, children[currentLevel1Index].Region.LargestDistanceFrom(point));
             }
             void AdvanceLevel1IndexCoveringCurrentBall()
             {
