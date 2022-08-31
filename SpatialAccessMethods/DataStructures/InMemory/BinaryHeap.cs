@@ -123,7 +123,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
 
     public void PreserveMaxEntryCount(int maxEntryCount)
     {
-        if (entryCount < maxEntryCount)
+        if (entryCount <= maxEntryCount)
             return;
 
         // This will automatically trim away the last levels

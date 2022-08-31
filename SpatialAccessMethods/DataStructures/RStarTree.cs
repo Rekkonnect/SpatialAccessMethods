@@ -912,7 +912,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
             int currentLevel1Index = 0;
 
-            Ball searchBall;
+            Ball searchBall = null!;
             int maxCurrentNodes = 0;
             // Keep increasing the ball's radius until there is chance it covers the requested neighbor count
             do
@@ -921,17 +921,60 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             }
             while (maxCurrentNodes < neighbors);
 
-            // Currently, this will cause full reiteration of all the nodes if the ball is expanded
-            // there must be a safer mechanism for minimizing the possibility of increasing the ball
-            // Perhaps adjust the algorithm so that the ball is the max possible of the neighbors
-            // That way, the nodes will be stored in a priority queue based on their shortest distance from the focal point
-            // And then they can be eliminated completely once they're out of range of the max in the min heap
-            // Make sure to delay heap trimming by the most possible, in order to reduce the O(n) iterations that have to be performed
+            var nodeQueue = new PriorityQueue<Node, double>();
+            for (int i = 0; i < currentLevel1Index; i++)
+            {
+                var node = children[i];
+                AddNodeToPriorityQueue(node);
+            }
 
-            // Iterate through all the children nodes and find all the entries inside the leaf nodes
-            // Only add entries to the heap until the requested neighbor count
-            // The heap should contain methods for keeping the other extremum
-            // Additionally, preservation of a maximum count
+            while (nodeQueue.Count > 0)
+            {
+                nodeQueue.TryDequeue(out var dequeued, out double distance);
+
+                if (distance >= nnHeap.MaxValue.Distance)
+                {
+                    nodeQueue.Clear();
+                    break;
+                }
+
+                switch (dequeued)
+                {
+                    case LeafNode leaf:
+                        // Attempt to delay heap trimming by the most possible,
+                        // in order to reduce the O(n) iterations that have to be performed
+                        // In theory, this is an optimization
+                        nnHeap.PreserveMaxEntryCount(neighbors);
+
+                        var entries = leaf.GetEntries();
+                        foreach (var entry in entries)
+                        {
+                            var entryDistance = entry.Location.DistanceFrom(point);
+                            if (entryDistance > nnHeap.MaxValue.Distance)
+                                continue;
+
+                            nnHeap.Add(new NearestNeighborEntry(entry, distance));
+                        }
+                        break;
+
+                    case ParentNode parent:
+                        var parentChildren = parent.GetChildren();
+                        AddNodesToPriorityQueue(parentChildren);
+                        break;
+                }
+            }
+
+            void AddNodesToPriorityQueue(IEnumerable<Node> nodes)
+            {
+                foreach (var node in nodes)
+                    AddNodeToPriorityQueue(node);
+            }
+
+            void AddNodeToPriorityQueue(Node node)
+            {
+                double distance = node.Region.ShortestDistanceFrom(point);
+                nodeQueue.Enqueue(node, distance);
+            }
 
             void ExpandCurrentSearchBall()
             {
@@ -941,7 +984,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
                 searchBall = GetForCurrentLevel1Index();
                 AdvanceLevel1IndexCoveringCurrentBall();
-                maxCurrentNodes = (int)Math.Pow(Order, Height) * currentLevel1Index;
+                maxCurrentNodes = (int)Math.Pow(MinChildren, Height) * currentLevel1Index;
             }
             Ball GetForCurrentLevel1Index()
             {
