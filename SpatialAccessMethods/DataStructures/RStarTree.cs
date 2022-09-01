@@ -905,6 +905,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         if (root is ParentNode parentRoot)
         {
+            // This algorithm makes so much sense in my brain
+            // I wonder if it's the one in the paper
             var children = parentRoot.GetChildren().ToArray();
             // Ascending distance from furthest rectangle vertex,
             // which defines the shortest ball that contains at least one entire child node's rectangle
@@ -997,18 +999,20 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                     currentLevel1Index++;
                 }
             }
+
+            return nnHeap.Select(e => e.Entry);
         }
-        else
+        else if (root is LeafNode leafRoot)
         {
-            var leafRoot = root as LeafNode;
-            // TODO: More
+            var entries = leafRoot.GetEntries().ToArray();
+
+            // At this point it is guaranteed that the requested neighbors are less than the total entries
+            return entries
+                .SortBy((furthest, closest) => closest.Location.DistanceFrom(point).CompareTo(furthest.Location.DistanceFrom(point)))
+                .Take(neighbors);
         }
 
-        // The root cases could be handled in a separate function perhaps
-        // This function makes so much sense in my brain I wonder if it's the one
-        // in the paper
-
-        return nnHeap.Select(e => e.Entry);
+        throw new InvalidOperationException("The root is not a valid node type and could not be handled.");
     }
 
     private record struct NearestNeighborEntry(TValue Entry, double Distance) : IComparable<NearestNeighborEntry>
