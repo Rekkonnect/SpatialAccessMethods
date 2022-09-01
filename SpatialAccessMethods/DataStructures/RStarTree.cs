@@ -53,6 +53,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     public int Height => GetHeightForEntryCount(GetEntryCount());
 
+    public Node? Root => root;
+
     public RStarTree(int order, ChildBufferController treeBufferController, RecordEntryBufferController recordBufferController, MinHeap<int> idGapHeap)
     {
         Order = order;
@@ -1007,9 +1009,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             var entries = leafRoot.GetEntries().ToArray();
 
             // At this point it is guaranteed that the requested neighbors are less than the total entries
-            return entries
-                .SortBy((furthest, closest) => closest.Location.DistanceFrom(point).CompareTo(furthest.Location.DistanceFrom(point)))
-                .Take(neighbors);
+            var ascendingDistanceComparer = new ILocated.ClosestDistanceComparer<TValue>(point);
+            return entries.SortBy(ascendingDistanceComparer).Take(neighbors);
         }
 
         throw new InvalidOperationException("The root is not a valid node type and could not be handled.");

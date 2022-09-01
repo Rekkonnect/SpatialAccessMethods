@@ -226,10 +226,44 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
         return new(value, index, this);
     }
 
-    public IEnumerator<TValue> GetEnumerator() => contents.GetEnumerator();
+    public bool ValidateStructure()
+    {
+        if (IsEmpty)
+            return true;
+
+        return ValidateNode(Root);
+    }
+    private bool ValidateNode(Node node)
+    {
+        return ValidateLeftChild(node)
+            && ValidateRightChild(node);
+    }
+    private bool ValidateLeftChild(Node parent)
+    {
+        if (!parent.HasLeftChild)
+            return true;
+
+        var left = parent.GetLeftChild();
+        return ValidateNode(parent, left);
+    }
+    private bool ValidateRightChild(Node parent)
+    {
+        if (!parent.HasRightChild)
+            return true;
+
+        var right = parent.GetRightChild();
+        return ValidateNode(parent, right);
+    }
+    private bool ValidateNode(Node parent, Node child)
+    {
+        return HigherOrEqualPriority(parent.Value, child.Value)
+            && ValidateNode(child);
+    }
+
+    public IEnumerator<TValue> GetEnumerator() => contents.GetEnumerator(entryCount);
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    private sealed class HeapArray : IEnumerable<TValue>
+    private sealed class HeapArray
     {
         private int height;
 
@@ -259,7 +293,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
         private void ReallocateContentsArray()
         {
             var newContents = new TValue[MaxEntries];
-            contents.CopyTo(newContents.AsSpan());
+            contents.CopyToSafe(newContents.AsSpan());
             contents = newContents;
         }
 
@@ -268,12 +302,10 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, IEnumerable<TVal
             this[node.Index] = node.Value;
         }
 
-        public IEnumerator<TValue> GetEnumerator()
+        public IEnumerator<TValue> GetEnumerator(int entryCount)
         {
-            // .NET remind me why the fuck this is a thing
-            return ((IEnumerable<TValue>)contents).GetEnumerator();
+            return new ArraySegment<TValue>(contents, 0, entryCount).GetEnumerator();
         }
-        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
         public TValue this[int index]
         {

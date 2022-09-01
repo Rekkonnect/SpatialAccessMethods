@@ -3,12 +3,19 @@ using System.Numerics;
 
 namespace SpatialAccessMethods.DataStructures;
 
-public interface IBinaryHeap<TValue>
+public interface IBinaryHeap<TValue> : IEnumerable<TValue>
 {
     public abstract ComparisonResult TopNodeInequality { get; }
 
     public int EntryCount { get; }
     public int Height { get; }
+    public sealed bool IsEmpty => EntryCount is 0;
+
+    public TValue? Pop();
+    public void Add(TValue value);
+    public void PreserveMaxEntryCount(int maxEntryCount);
+
+    public bool ValidateStructure();
 
     protected static int HeightForEntries(int entryCount)
     {
@@ -19,6 +26,6 @@ public interface IBinaryHeap<TValue>
     }
     protected internal static int EntriesForHeight(int height)
     {
-        return (1 << (height + 1)) - 1;
+        return (1 << height) - 1;
     }
 }

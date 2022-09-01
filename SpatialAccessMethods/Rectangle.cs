@@ -4,7 +4,7 @@ using SpatialAccessMethods.Utilities;
 namespace SpatialAccessMethods;
 
 /// <summary>Represents a hyper-rectangle, defined by two edge points.</summary>
-public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>
+public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, IEquatable<Rectangle>
 {
     // The points' ranks have been validated to be equal
     /// <summary>Gets the rank of the hyper-rectangle. It is determined by the one point that defines it.</summary>
@@ -374,6 +374,22 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>
 
     public double OverlappingArea(Rectangle other) => Intersection(other)?.Area ?? 0;
 
+    public bool Equals(Rectangle? other)
+    {
+        return other is Rectangle rectangle
+            && MinPoint == rectangle.MinPoint
+            && MaxPoint == rectangle.MaxPoint;
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return Equals(obj as Rectangle);
+    }
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(MinPoint, MaxPoint);
+    }
+
 #nullable disable
     public record struct ExtremumPointDistanceFromOriginComparer(Extremum Extremum, Point Origin)
         : IComparer<Rectangle>
@@ -385,4 +401,5 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>
 
         private double GetDistanceFromOrigin(Rectangle rectangle) => rectangle.AbsoluteExtremumDistanceFrom(Origin, Extremum);
     }
+#nullable restore
 }

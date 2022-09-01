@@ -17,6 +17,8 @@ public sealed class SpatialDataTable<TValue>
 
     public int RecordCount => HeaderBlock.RecordCount;
 
+    public RStarTree<TValue> IndexTree => tree;
+
     public SpatialDataTable(RecordEntryBufferController entryBufferController, ChildBufferController treeBufferController, MinHeap<int> recordIDGapHeap, MinHeap<int> treeIDGapHeap)
     {
         int dimensionality = entryBufferController.HeaderBlock.Dimensionality;
@@ -154,6 +156,7 @@ public sealed class SpatialDataTable<TValue>
         return 62 - 2 * dimensionality;
     }
 
+    // TODO: Perhaps extract those outside
     public interface IQuery
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table);

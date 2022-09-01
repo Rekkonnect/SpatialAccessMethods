@@ -1,4 +1,6 @@
-﻿namespace SpatialAccessMethods.Utilities;
+﻿using Microsoft.CodeAnalysis.CSharp.Syntax;
+
+namespace SpatialAccessMethods.Utilities;
 
 public static class ArrayExtensions
 {
@@ -15,6 +17,22 @@ public static class ArrayExtensions
 
             yield return new(source, offset, iterationSize);
             offset += iterationSize;
+        }
+    }
+
+    public static void CopyToSafe<T>(this T[] array, Span<T> target)
+    {
+        if (array is null)
+            return;
+
+        if (target.Length < array.Length)
+        {
+            var arraySpan = new Span<T>(array, 0, target.Length);
+            arraySpan.CopyTo(target);
+        }
+        else
+        {
+            array.CopyTo(target);
         }
     }
 }

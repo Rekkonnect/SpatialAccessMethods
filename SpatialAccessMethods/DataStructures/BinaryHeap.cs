@@ -1,7 +1,9 @@
 ﻿using Garyon.Extensions;
 using Garyon.Objects;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SpatialAccessMethods.FileManagement;
 using SpatialAccessMethods.Utilities;
+using System.Collections;
 using System.Numerics;
 using UnitsNet;
 using UnitsNet.NumberExtensions.NumberToInformation;
@@ -155,7 +157,7 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
     {
         return child.SatisfiesComparison(parent, TopNodeComparisonKinds);
     }
-    private bool HigherOrEqualHierarchy(TValue child, TValue parent)
+    private bool HigherOrEqualPriority(TValue child, TValue parent)
     {
         return child.SatisfiesComparison(parent, TopNodeComparisonKinds | ComparisonKinds.Equal);
     }
@@ -191,6 +193,67 @@ public abstract class BinaryHeap<TValue> : IBinaryHeap<TValue>, ISecondaryStorag
 
         var value = ReadValue(index);
         return new(value, index, this);
+    }
+
+    public bool ValidateStructure()
+    {
+        if (IsEmpty)
+            return true;
+
+        return ValidateNode(Root);
+    }
+    private bool ValidateNode(Node node)
+    {
+        return ValidateLeftChild(node)
+            && ValidateRightChild(node);
+    }
+    private bool ValidateLeftChild(Node parent)
+    {
+        if (!parent.HasLeftChild)
+            return true;
+
+        var left = parent.GetLeftChild();
+        return ValidateNode(parent, left);
+    }
+    private bool ValidateRightChild(Node parent)
+    {
+        if (!parent.HasRightChild)
+            return true;
+
+        var left = parent.GetRightChild();
+        return ValidateNode(parent, left);
+    }
+    private bool ValidateNode(Node parent, Node child)
+    {
+        return HigherOrEqualPriority(child.Value, parent.Value)
+            && ValidateNode(child);
+    }
+
+    public IEnumerator<TValue> GetEnumerator()
+    {
+        return new Enumerator(this);
+    }
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    private record class Enumerator(BinaryHeap<TValue> Heap) : IEnumerator<TValue>
+    {
+        private int currentIndex = -1;
+
+        public TValue Current => Heap.GetNode(currentIndex).Value;
+        object IEnumerator.Current => Current;
+
+        public bool MoveNext()
+        {
+            currentIndex++;
+            return currentIndex < Heap.entryCount;
+        }
+
+        public void Reset()
+        {
+            currentIndex = -1;
+        }
+
+        void IDisposable.Dispose() { }
     }
 
     public sealed class HeapEntryBufferController : EntryBufferController

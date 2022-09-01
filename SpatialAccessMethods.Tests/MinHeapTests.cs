@@ -1,12 +1,13 @@
 using SpatialAccessMethods.DataStructures;
 using SpatialAccessMethods.FileManagement;
-using SpatialAccessMethods.Utilities;
 
 namespace SpatialAccessMethods.Tests;
 
-public class MinHeapTests : FileManagementTestContainer
+public class MinHeapTests : FileManagementTestContainer, IMinHeapTests
 {
     private MinHeap<int> heap;
+
+    IBinaryHeap<int> IMinHeapTests.Heap => heap;
 
     [SetUp]
     public void Setup()
@@ -16,25 +17,13 @@ public class MinHeapTests : FileManagementTestContainer
     }
 
     [Test]
-    public void AddingValues()
+    public void AddingPopping()
     {
-        int[] values = new int[10];
-        int previous = 0;
-        for (int i = 0; i < values.Length; i++)
-        {
-            int next = Random.Shared.Next(previous + 1, previous + 5);
-            values[i] = next;
-            previous = next;
-        }
-
-        foreach (var value in values.RandomlyEnumerate())
-            heap.Add(value);
-
-        Assert.That(heap.EntryCount, Is.EqualTo(values.Length));
-        
-        for (int i = 0; i < values.Length; i++)
-            Assert.That(heap.Pop(), Is.EqualTo(values[i]));
-        
-        Assert.That(heap.EntryCount, Is.EqualTo(0));
+        (this as IMinHeapTests).AddingPopping();
+    }
+    [Test]
+    public void MaxEntryCountReduction()
+    {
+        (this as IMinHeapTests).MaxEntryCountReduction();
     }
 }
