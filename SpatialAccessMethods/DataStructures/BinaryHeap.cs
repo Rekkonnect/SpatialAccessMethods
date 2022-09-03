@@ -81,13 +81,6 @@ public abstract class BinaryHeap<TValue> : BinaryHeapBase<TValue>, ISecondarySto
         EntryCount = maxEntryCount;
     }
 
-    // This is unnecessary, given the presence of the above method
-    public void EliminateLastLevel()
-    {
-        int targetHeight = Height - 1;
-        EntryCount = EntriesForHeight(targetHeight);
-    }
-
     public void Clear()
     {
         EntryCount = 0;

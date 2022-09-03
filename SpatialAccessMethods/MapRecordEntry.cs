@@ -18,7 +18,8 @@ public struct MapRecordEntry : ILocated, IID, IRecordSerializable<MapRecordEntry
     public float Longitude => (float)Location.GetCoordinate(1);
 
     public const int RecordSize = 256;
-    public int MaxNameChars => 127 - 2 * Location.Rank;
+    public const int RecordCharSize = RecordSize / sizeof(char) - 1; 
+    public int MaxNameChars => RecordCharSize - 2 * Location.Rank;
 
     public MapRecordEntry(Point location, string? name = null)
         : this(0, location, name) { }

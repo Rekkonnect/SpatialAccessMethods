@@ -402,7 +402,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public Rectangle LeftMBR => Rectangle.CreateForRectangles(LeftEnumerable.ToArray());
         public Rectangle RightMBR => Rectangle.CreateForRectangles(RightEnumerable.ToArray());
 
-        public double AreaValue => RStarTree<TValue>.AreaValue(LeftMBR, RightMBR);
+        public double VolumeValue => RStarTree<TValue>.VolumeValue(LeftMBR, RightMBR);
         public double MarginValue => RStarTree<TValue>.MarginValue(LeftMBR, RightMBR);
         public double OverlapValue => RStarTree<TValue>.OverlapValue(LeftMBR, RightMBR);
 
@@ -415,7 +415,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 if (comparison is not 0)
                     return comparison;
 
-                return a.AreaValue.CompareTo(b.AreaValue);
+                return a.VolumeValue.CompareTo(b.VolumeValue);
             }
 #nullable restore
         }
@@ -524,8 +524,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 double newOverlap = parent.GetTotalChildrenOverlappingArea(Node, newRegion);
                 OverlapEnlargement = newOverlap - previousOverlap;
 
-                double oldArea = Node.Region.Area;
-                double newArea = newRegion.Area;
+                double oldArea = Node.Region.Volume;
+                double newArea = newRegion.Volume;
                 AreaEnlargement = newArea - oldArea;
                 Area = newArea;
             }
@@ -535,11 +535,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     private static double OverlapValue(Rectangle a, Rectangle b)
     {
-        return a.OverlappingArea(b);
+        return a.OverlappingVolume(b);
     }
-    private static double AreaValue(Rectangle a, Rectangle b)
+    private static double VolumeValue(Rectangle a, Rectangle b)
     {
-        return a.Area + b.Area;
+        return a.Volume + b.Volume;
     }
     private static double MarginValue(Rectangle a, Rectangle b)
     {
@@ -647,13 +647,18 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
-    public int GetHeightForEntryCount(int entryCount)
+    public int GetHeightForEntryCount(int entryCount, double capacity = 1)
     {
-        return (int)Math.Ceiling(Math.Log(entryCount, Order));
+        double maxEntryCount = Math.Floor(entryCount * capacity);
+        return (int)Math.Ceiling(Math.Log(maxEntryCount, Order));
     }
 
     public void BulkLoad(IEnumerable<TValue> entries)
     {
+        // Average capacity arbitrarily picked as 70%
+        // to avoid needing to immediately split/reinsert after insertion
+        const double averageCapacity = 0.70;
+
         if (!IsEmpty)
             throw new InvalidOperationException("Cannot bulk load an R*-tree that already contains nodes.");
 
@@ -662,7 +667,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         for (int i = 0; i < entryArray.Length; i++)
             entryArray[i].ID = i;
 
-        int nodeCount = (int)Math.Ceiling((double)entryArray.Length / Order);
+        double maxEntriesPerNode = Math.Floor(entryArray.Length / averageCapacity);
+        int height = GetHeightForEntryCount(entryArray.Length, averageCapacity);
+        int nodeCount = (int)Math.Ceiling(Math.Pow(maxEntriesPerNode, height)); // Why the fuck am I doing that
         TreeBufferController.EnsureLengthForEntry(nodeCount);
         
         int dimensionality = RecordBufferController.HeaderBlock.Dimensionality;
@@ -671,8 +678,6 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         StableSortEntryArray(entryArray, 0);
         var childrenDesignNodes = CreateDesignNodes(entryArray, slabCount, NodeID.Root);
-
-        // TODO: Something goes horribly wrong and doesn't account for the order of the tree
 
         var rootChildrenIDs = childrenDesignNodes.Select(node => node.ID);
         var rootRectangle = Rectangle.CreateForPoints(entryArray.Select(entry => entry.Location).ToArray());
@@ -689,6 +694,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         return entryArray.SortBy(new ILocated.LocationComparer<TValue, Point.CoordinateComparer>(comparer));
     }
 
+    // I don't think I have the necessary patience for this
     private void BulkLoadSlab(IEnumerable<BulkDesignNode> designNodes, BulkLoadArguments arguments)
     {
         var designNodeArray = designNodes.ToArray();
@@ -911,17 +917,17 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             // I wonder if it's the one in the paper
             var children = parentRoot.GetChildren().ToArray();
             // Ascending distance from furthest rectangle vertex,
-            // which defines the shortest ball that contains at least one entire child node's rectangle
+            // which defines the shortest sphere that contains at least one entire child node's rectangle
             children.SortBy((a, b) => a.Region.LargestDistanceFrom(point).CompareTo(b.Region.LargestDistanceFrom(point)));
 
             int currentLevel1Index = 0;
 
-            Ball searchBall = null!;
+            Sphere searchSphere = default;
             int maxCurrentNodes = 0;
-            // Keep increasing the ball's radius until there is chance it covers the requested neighbor count
+            // Keep increasing the sphere's radius until there is chance it covers the requested neighbor count
             do
             {
-                ExpandCurrentSearchBall();
+                ExpandCurrentSearchSphere();
             }
             while (maxCurrentNodes < neighbors);
 
@@ -980,23 +986,23 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 nodeQueue.Enqueue(node, distance);
             }
 
-            void ExpandCurrentSearchBall()
+            void ExpandCurrentSearchSphere()
             {
                 // Sanity check
                 if (currentLevel1Index >= Order - 1)
                     return;
 
-                searchBall = GetForCurrentLevel1Index();
-                AdvanceLevel1IndexCoveringCurrentBall();
+                searchSphere = GetForCurrentLevel1Index();
+                AdvanceLevel1IndexCoveringCurrentSphere();
                 maxCurrentNodes = (int)Math.Pow(MinChildren, Height) * currentLevel1Index;
             }
-            Ball GetForCurrentLevel1Index()
+            Sphere GetForCurrentLevel1Index()
             {
-                return new Ball(point, children[currentLevel1Index].Region.LargestDistanceFrom(point));
+                return new Sphere(point, children[currentLevel1Index].Region.LargestDistanceFrom(point));
             }
-            void AdvanceLevel1IndexCoveringCurrentBall()
+            void AdvanceLevel1IndexCoveringCurrentSphere()
             {
-                while (searchBall.Overlaps(children[currentLevel1Index].Region))
+                while (searchSphere.Overlaps(children[currentLevel1Index].Region))
                 {
                     currentLevel1Index++;
                 }
@@ -1396,7 +1402,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
         protected void WriteOrSkipRegion(ref SpanStream writer)
         {
-            if (Region is null)
+            if (Region.IsInvalid)
                 SkipRegion(ref writer);
             else
                 WriteRegion(ref writer);
@@ -1572,7 +1578,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 if (region is null)
                     LoadRegion();
 
-                return region!;
+                return region!.Value;
             }
         }
 
@@ -1718,7 +1724,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 if (otherChild.ID == targetChild.ID)
                     continue;
 
-                double overlap = customRegion.OverlappingArea(otherChild.Region);
+                double overlap = customRegion.OverlappingVolume(otherChild.Region);
                 totalOverlap += overlap;
             }
             return totalOverlap;

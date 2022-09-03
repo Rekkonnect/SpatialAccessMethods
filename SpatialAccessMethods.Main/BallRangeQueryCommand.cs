@@ -1,11 +1,11 @@
 ﻿namespace SpatialAccessMethods.Main;
 
-public sealed class BallRangeQueryCommand : RangeQueryCommand<Ball>
+public sealed class BallRangeQueryCommand : RangeQueryCommand<Sphere>
 {
     private Point center;
     private double radius;
 
-    public override Ball Range => new(center, radius);
+    public override Sphere Range => new(center, radius);
 
     public BallRangeQueryCommand()
     {

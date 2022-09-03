@@ -8,7 +8,7 @@ public interface IOverlappableWith<TShape> : IShape
 
 public static class IOverlappableWithExtensions
 {
-    public static bool Overlaps<TShapeA, TShapeB>(TShapeA shapeA, TShapeB shapeB)
+    public static bool Overlaps<TShapeA, TShapeB>(this TShapeA shapeA, TShapeB shapeB)
         where TShapeA : IShape
         where TShapeB : IOverlappableWith<TShapeA>
     {

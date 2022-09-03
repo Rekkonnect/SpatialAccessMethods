@@ -2,6 +2,7 @@
 using Garyon.Functions;
 using Garyon.Objects;
 using SpatialAccessMethods.Utilities;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace SpatialAccessMethods;
@@ -13,6 +14,9 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
 
     /// <summary>Gets the rank of the point, which is the number of dimensions of the space it belongs to.</summary>
     public int Rank => coordinates.Length;
+
+    /// <summary>Determines whether this point instance is a dummy invalid one.</summary>
+    public bool IsInvalid => coordinates is null;
 
     /// <summary>Calculates and gets the sum of the point's coordinates.</summary>
     public double CoordinateSum => coordinates.Sum();
@@ -47,7 +51,10 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
             return new Point(result);
         }
     }
-    
+
+    public double Min => coordinates.Min();
+    public double Max => coordinates.Max();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Point"/> class out of an array of coordinates.
     /// </summary>
@@ -156,14 +163,7 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
     
     public static Point operator -(Point left, Point right)
     {
-        int rank = left.Rank;
-        if (right.Rank != rank)
-            throw new ArgumentException("The points must have the same rank.");
-
-        double[] sum = new double[rank];
-        for (int i = 0; i < rank; i++)
-            sum[i] = left.coordinates[i] - right.coordinates[i];
-        return new(sum);
+        return left.DifferenceFrom(right);
     }
 
     public static Point operator +(Point point, double scalar) => ScalarAdd(point, scalar);

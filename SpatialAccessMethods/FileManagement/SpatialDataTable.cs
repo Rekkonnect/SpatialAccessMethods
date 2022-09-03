@@ -229,5 +229,40 @@ public sealed class SpatialDataTable<TValue>
             return table.NearestNeighborQuerySerial(Point, Neighbors);
         }
     }
+
+    private IEnumerable<TValue> SkylineQuerySerial(Extremum domatingExtremum)
+    {
+        var dominatingEntries = new Dictionary<Point, TValue>();
+        foreach (var entry in GetAllEntries())
+        {
+            foreach (var dominatingLocation in dominatingEntries.Keys.ToList())
+            {
+                var domination = entry.Location.ResolveDomination(dominatingLocation, domatingExtremum);
+                if (domination is Domination.Subordinate)
+                    goto continueOuter;
+
+                if (domination is Domination.Dominant)
+                {
+                    dominatingEntries.Remove(dominatingLocation);
+                    // DO NOT BREAK to keep iterating through to remove all dominated points
+                }
+            }
+
+            // Even if locations are not unique, this will avoid throwing
+            dominatingEntries[entry.Location] = entry;
+
+        continueOuter:
+            continue;
+        }
+        return dominatingEntries.Values;
+    }
+
+    public record struct SerialSkylineQuery(Extremum DomatingExtremum) : IQuery
+    {
+        public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
+        {
+            return table.SkylineQuerySerial(DomatingExtremum);
+        }
+    }
     #endregion
 }

@@ -3,9 +3,9 @@ using SpatialAccessMethods.FileManagement;
 using SpatialAccessMethods.Utilities;
 using UnitsNet;
 
-namespace SpatialAccessMethods.Tests;
+namespace SpatialAccessMethods.QualityAssurance;
 
-public abstract class FileManagementTestContainer
+public abstract class FileManagementQAContainer
 {
     protected static MinHeap<T> CreateMinHeap<T>(Information blockSize, MasterBufferController masterController)
         where T : unmanaged, INumber<T>

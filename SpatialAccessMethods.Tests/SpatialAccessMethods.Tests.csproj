@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\SpatialAccessMethods.QualityAssurance\SpatialAccessMethods.QualityAssurance.csproj" />
     <ProjectReference Include="..\SpatialAccessMethods\SpatialAccessMethods.csproj" />
   </ItemGroup>
 

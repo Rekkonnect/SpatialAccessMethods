@@ -1,4 +1,6 @@
-﻿namespace SpatialAccessMethods.Utilities;
+﻿using Garyon.Objects.Advanced;
+
+namespace SpatialAccessMethods.Utilities;
 
 public static class RandomEnumeration
 {
@@ -33,5 +35,15 @@ public static class RandomEnumeration
 
         int index = random.Next(0, origin.Count);
         return origin[index];
+    }
+
+    public static T? GetRandomOrNull<T>(this IReadOnlyList<T> origin, AdvancedRandom? random = null)
+    {
+        random ??= AdvancedRandomDLC.Shared;
+
+        if (random.NextBoolean())
+            return default;
+
+        return origin.GetRandom(random);
     }
 }

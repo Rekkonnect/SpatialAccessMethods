@@ -1,9 +1,10 @@
 using SpatialAccessMethods.DataStructures;
 using SpatialAccessMethods.FileManagement;
+using SpatialAccessMethods.QualityAssurance;
 
 namespace SpatialAccessMethods.Tests;
 
-public class MinHeapTests : FileManagementTestContainer, IMinHeapTests
+public class MinHeapTests : FileManagementQAContainer, IMinHeapTests
 {
     private MinHeap<int> heap;
 

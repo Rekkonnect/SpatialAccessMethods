@@ -1,28 +1,32 @@
 ﻿using Garyon.Objects;
 using SpatialAccessMethods.Utilities;
+using System.Diagnostics;
 
 namespace SpatialAccessMethods;
 
 /// <summary>Represents a hyper-rectangle, defined by two edge points.</summary>
-public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, IEquatable<Rectangle>
+public struct Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, IEquatable<Rectangle>
 {
-    // The points' ranks have been validated to be equal
-    /// <summary>Gets the rank of the hyper-rectangle. It is determined by the one point that defines it.</summary>
-    public int Rank => MinPoint.Rank;
-
-    /// <summary>Gets the lengths of the hyper-rectangle's dimensions, expressed as a <see cref="Point"/>.</summary>
-    /// <returns>A <seealso cref="Point"/>, with each of its coordinates representing the length of this hyper-rectangle in the respective dimension.</returns>
-    public Point DimensionLengths => MaxPoint.DifferenceFrom(MinPoint);
-    
     /// <summary>Gets the min point of the hyper-rectangle.</summary>
     public Point MinPoint { get; }
     
     /// <summary>Gets the max point of the hyper-rectangle.</summary>
     public Point MaxPoint { get; }
-    
-    /// <summary>Gets the area of the hyper-rectangle, which is the product of all of its dimension lengths.</summary>
-    /// <returns>The area of the hyper-rectangle.</returns>
-    public double Area => DimensionLengths.CoordinateProduct;
+
+    // The points' ranks have been validated to be equal
+    /// <summary>Gets the rank of the hyper-rectangle. It is determined by the one point that defines it.</summary>
+    public int Rank => MinPoint.Rank;
+
+    // Both should be invalid at the same time
+    public bool IsInvalid => MinPoint.IsInvalid;
+
+    /// <summary>Gets the lengths of the hyper-rectangle's dimensions, expressed as a <see cref="Point"/>.</summary>
+    /// <returns>A <seealso cref="Point"/>, with each of its coordinates representing the length of this hyper-rectangle in the respective dimension.</returns>
+    public Point DimensionLengths => MaxPoint.DifferenceFrom(MinPoint);
+
+    /// <summary>Gets the hyper-volume of the hyper-rectangle, which is the product of all of its dimension lengths.</summary>
+    /// <returns>The hyper-volume of the hyper-rectangle.</returns>
+    public double Volume => DimensionLengths.CoordinateProduct;
     /// <summary>Gets the margin of the hyper-rectangle, which is the sum of all of its dimension lengths multiplied by 2 ^ rank.</summary>
     /// <returns>The margin of the hyper-rectangle.</returns>
     public double Margin => (1 << (Rank - 1)) * DimensionLengths.CoordinateSum;
@@ -31,6 +35,9 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, IE
 
     private Rectangle(Point min, Point max)
     {
+        Debug.Assert(!min.IsInvalid);
+        Debug.Assert(!max.IsInvalid);
+
         MinPoint = min;
         MaxPoint = max;
     }
@@ -89,17 +96,24 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, IE
     /// </summary>
     /// <param name="points">The points that will be contained in or touch the hyper-rectangle.</param>
     /// <returns>The smallest hyper-rectangle that contains the given points.</returns>
+    /// <remarks>
+    /// If the given points array only contains one point, the resulting hyper-rectangle is the one
+    /// whose center is the given point, and has a total hyper-volume of 0.
+    /// </remarks>
     /// <exception cref="ArgumentException">
     /// Thrown in any of the following cases:
     /// <list type="bullet">
-    ///     <item>the points are not at least 2</item>
+    ///     <item>the given points array is empty</item>
     ///     <item>any of the given points' rank does not match the others'</item>
     /// </list>
     /// </exception>
     public static Rectangle CreateForPoints(params Point[] points)
     {
-        if (points.Length < 2)
-            throw new ArgumentException("The edge points must be at least 2.");
+        if (points.Length is 0)
+            throw new ArgumentException("There points array should not be empty.");
+
+        if (points.Length is 1)
+            return new(points[0], points[0]);
 
         int rank = points[0].Rank;
         for (int i = 1; i < points.Length; i++)
@@ -372,25 +386,26 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, IE
         return new Rectangle(minPoint, maxPoint);
     }
 
-    public double OverlappingArea(Rectangle other) => Intersection(other)?.Area ?? 0;
+    public double OverlappingVolume(Rectangle other) => Intersection(other)?.Volume ?? 0;
 
-    public bool Equals(Rectangle? other)
+    public bool Equals(Rectangle other)
     {
-        return other is Rectangle rectangle
-            && MinPoint == rectangle.MinPoint
-            && MaxPoint == rectangle.MaxPoint;
+        return MinPoint == other.MinPoint
+            && MaxPoint == other.MaxPoint;
     }
 
     public override bool Equals(object? obj)
     {
-        return Equals(obj as Rectangle);
+        return obj is Rectangle rectangle && Equals(rectangle);
     }
     public override int GetHashCode()
     {
         return HashCode.Combine(MinPoint, MaxPoint);
     }
 
-#nullable disable
+    public static bool operator ==(Rectangle left, Rectangle right) => left.Equals(right);
+    public static bool operator !=(Rectangle left, Rectangle right) => !(left == right);
+
     public record struct ExtremumPointDistanceFromOriginComparer(Extremum Extremum, Point Origin)
         : IComparer<Rectangle>
     {
@@ -401,5 +416,4 @@ public class Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, IE
 
         private double GetDistanceFromOrigin(Rectangle rectangle) => rectangle.AbsoluteExtremumDistanceFrom(Origin, Extremum);
     }
-#nullable restore
 }

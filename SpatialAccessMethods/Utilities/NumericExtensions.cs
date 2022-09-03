@@ -13,4 +13,13 @@ public static class NumericExtensions
             result *= value;
         return result;
     }
+
+    /// <summary>Calculates the square of the given number.</summary>
+    /// <param name="number">The number whose square to get.</param>
+    /// <returns>The square of the number.</returns>
+    public static TNumber Square<TNumber>(this TNumber number)
+        where TNumber : INumber<TNumber>
+    {
+        return number * number;
+    }
 }
