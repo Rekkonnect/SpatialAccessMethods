@@ -7,7 +7,7 @@ public class MinHeapTests : FileManagementTestContainer, IMinHeapTests
 {
     private MinHeap<int> heap;
 
-    IBinaryHeap<int> IMinHeapTests.Heap => heap;
+    IMinHeap<int> IMinHeapTests.Heap => heap;
 
     [SetUp]
     public void Setup()

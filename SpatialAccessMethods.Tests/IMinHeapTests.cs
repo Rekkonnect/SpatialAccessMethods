@@ -5,7 +5,7 @@ namespace SpatialAccessMethods.Tests;
 
 public interface IMinHeapTests
 {
-    public IBinaryHeap<int> Heap { get; }
+    public IMinHeap<int> Heap { get; }
 
     [Test]
     public sealed void AddingPopping()
