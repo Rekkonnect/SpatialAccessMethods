@@ -1356,7 +1356,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public abstract Node TrimRegion(Rectangle newRegion);
 
-        // TODO: Override in LazyNode to avoid writing the children and region, if not loaded
+        // TODO: Due to the algorithm being abstracted, apply the same algorithm used in the lazy node
         public virtual void WriteChangesToBuffer()
         {
             Debug.Assert(ChildrenIDs.Count <= Tree.MaxChildren, "Attempted to serialize a node with more children than the max allowed.");

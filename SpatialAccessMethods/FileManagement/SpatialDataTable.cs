@@ -185,4 +185,49 @@ public sealed class SpatialDataTable<TValue>
             return table.tree.RangeQuery(Range);
         }
     }
+
+    #region Naive Algorithms
+    private IEnumerable<TValue> GetAllEntries()
+    {
+        int maxID = HeaderBlock.MaxID;
+        for (int id = 1; id <= maxID; id++)
+        {
+            var entry = GetEntry(id);
+            if (entry.IsValid)
+                yield return entry;
+        }
+    }
+
+    private IEnumerable<TValue> EntriesInRangeSerial<TShape>(TShape range)
+        where TShape : IShape
+    {
+        return GetAllEntries().Where(entry => range.Contains(entry.Location));
+    }
+
+    public record struct SerialRangeQuery<TShape>(TShape Range) : IQuery
+        where TShape : IShape, IOverlappableWith<Rectangle>
+    {
+        public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
+        {
+            return table.EntriesInRangeSerial(Range);
+        }
+    }
+
+    private IEnumerable<TValue> NearestNeighborQuerySerial(Point center, int neighbors)
+    {
+        var comparer = new ILocated.ClosestDistanceComparer<TValue>(center);
+        return GetAllEntries()
+            .ToArray()
+            .SortBy(comparer)
+            .Take(neighbors);
+    }
+
+    public record struct SerialNearestNeighborQuery(Point Point, int Neighbors) : IQuery
+    {
+        public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
+        {
+            return table.NearestNeighborQuerySerial(Point, Neighbors);
+        }
+    }
+    #endregion
 }
