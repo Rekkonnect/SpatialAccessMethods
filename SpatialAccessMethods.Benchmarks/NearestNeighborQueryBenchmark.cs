@@ -3,6 +3,7 @@ using SpatialAccessMethods.FileManagement;
 
 namespace SpatialAccessMethods.Benchmarks;
 
+[MemoryDiagnoser]
 public class NearestNeighborQueryBenchmark : SpatialDataTableBenchmark
 {
     // Arbitrary values are the best
@@ -14,7 +15,7 @@ public class NearestNeighborQueryBenchmark : SpatialDataTableBenchmark
 
     private Point focalPoint;
 
-    [GlobalSetup]
+    //[GlobalSetup]
     public override void Setup()
     {
         base.Setup();

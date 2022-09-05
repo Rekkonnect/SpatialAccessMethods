@@ -5,13 +5,15 @@ using SpatialAccessMethods.QualityAssurance;
 
 namespace SpatialAccessMethods.Benchmarks;
 
+[MemoryDiagnoser]
+[IterationCount(50)]
 public abstract class SpatialDataTableBenchmark : SpatialDataTableQAContainer
 {
     protected readonly MapRecordEntryCollection Entries = new();
 
     [Params(2, 3, 4)]
     public int Dimensionality { get; set; }
-    [Params(500, 1500, 2500, 4850, 8000, 15000)]
+    [Params(1234, 2500, 6123, 15000)]
     public int EntryCount { get; set; }
 
     [GlobalSetup]
@@ -19,6 +21,7 @@ public abstract class SpatialDataTableBenchmark : SpatialDataTableQAContainer
     {
         InitializeTableComponents();
         Entries.Generate(Dimensionality, EntryCount);
+        InitializeTable(Dimensionality);
     }
 
     [IterationSetup]

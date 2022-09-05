@@ -2,6 +2,7 @@
 
 namespace SpatialAccessMethods.Benchmarks;
 
+[MemoryDiagnoser]
 public class BulkLoadingBenchmark : SpatialDataTableBenchmark
 {
     // This benchmark only accounts for the serial loading of the R*-tree

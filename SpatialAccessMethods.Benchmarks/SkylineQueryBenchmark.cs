@@ -4,6 +4,7 @@ using SpatialAccessMethods.FileManagement;
 
 namespace SpatialAccessMethods.Benchmarks;
 
+[MemoryDiagnoser]
 public class SkylineQueryBenchmark : SpatialDataTableBenchmark
 {
     [Benchmark(Baseline = true)]
