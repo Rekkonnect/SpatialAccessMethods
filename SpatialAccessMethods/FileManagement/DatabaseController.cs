@@ -1,4 +1,5 @@
-﻿using SpatialAccessMethods.DataStructures;
+﻿using Garyon.Extensions;
+using SpatialAccessMethods.DataStructures;
 using UnitsNet;
 using UnitsNet.NumberExtensions.NumberToInformation;
 
@@ -14,18 +15,53 @@ public sealed class DatabaseController : IDisposable
 
     public static readonly int DefaultMaxBlockCount = (int)(DefaultMaxBlockMemory / DefaultBlockSize);
 
-    public const string DefaultEntryFilePath = "datafile";
-    public const string DefaultTreeFilePath = "rtreeindex";
-    public const string DefaultEntryIDGapFilePath = "datafile.gap";
-    public const string DefaultTreeIDGapFilePath = "rtreeindex.gap";
+    public const string DefaultTableFileName = "datafile";
+    public const string DefaultIndexFileName = "index";
+
+    public const string FileNamesFilePath = "db/filenames.txt";
 
     private readonly MasterBufferController masterController;
-    public readonly SpatialDataTable<MapRecordEntry> Table;
+    private readonly Lazy<SpatialDataTable<MapRecordEntry>> lazyTable;
+
+    public SpatialDataTable<MapRecordEntry> Table => lazyTable.Value;
+
+    public string TableFileName { get; private set; } = PrependSubdirectory(DefaultTableFileName);
+    public string IndexFileName { get; private set; } = PrependSubdirectory(DefaultIndexFileName);
+
+    public string TableIDGapFileName => GetGapFileName(TableFileName);
+    public string IndexIDGapFileName => GetGapFileName(IndexFileName);
 
     private DatabaseController()
     {
         masterController = new(DefaultMaxBlockMemory);
-        Table = InitializeTable();
+        LoadFileNames();
+        lazyTable = new(InitializeTable);
+    }
+
+    private void LoadFileNames()
+    {
+        if (!File.Exists(FileNamesFilePath))
+            return;
+
+        var text = File.ReadAllText(FileNamesFilePath);
+        var lines = text.GetLines();
+        if (lines.Length != 2)
+            throw new FileLoadException("The file names file should only consist of two lines specifying the file names of the table file and the index file.");
+
+        TableFileName = lines[0];
+        IndexFileName = lines[1];
+    }
+    private void DumpFileNames()
+    {
+        File.WriteAllText(FileNamesFilePath, $"{TableFileName}\r\n{IndexFileName}");
+    }
+
+    // Changing the file names while the table is loaded is not supported yet
+    public void SetFileNames(string tableFileName, string indexFileName)
+    {
+        TableFileName = tableFileName;
+        IndexFileName = indexFileName;
+        DumpFileNames();
     }
 
     public void Dispose()
@@ -35,20 +71,20 @@ public sealed class DatabaseController : IDisposable
     
     private SpatialDataTable<MapRecordEntry> InitializeTable()
     {
-        var entryBufferController = new RecordEntryBufferController(DefaultEntryFilePath, masterController)
+        var tableBufferController = new RecordEntryBufferController(TableFileName, masterController)
         {
             BlockSize = DefaultBlockSize
         };
 
-        var treeBufferController = new ChildBufferController(DefaultTreeFilePath, masterController)
+        var treeBufferController = new ChildBufferController(IndexFileName, masterController)
         {
             BlockSize = DefaultBlockSize
         };
 
-        var recordIDGapHeap = InitializeHeap<int>(DefaultEntryIDGapFilePath);
-        var treeIDGapHeap = InitializeHeap<int>(DefaultTreeIDGapFilePath);
+        var recordIDGapHeap = InitializeHeap<int>(TableIDGapFileName);
+        var treeIDGapHeap = InitializeHeap<int>(IndexIDGapFileName);
         
-        return new(entryBufferController, treeBufferController, recordIDGapHeap, treeIDGapHeap);
+        return new(tableBufferController, treeBufferController, recordIDGapHeap, treeIDGapHeap);
     }
     private MinHeap<T> InitializeHeap<T>(string fileName)
         where T : unmanaged, INumber<T>
@@ -59,4 +95,7 @@ public sealed class DatabaseController : IDisposable
         };
         return new MinHeap<T>(controller);
     }
+
+    private static string GetGapFileName(string baseName) => $"{baseName}.gap";
+    private static string PrependSubdirectory(string fileName) => $"db/{fileName}";
 }

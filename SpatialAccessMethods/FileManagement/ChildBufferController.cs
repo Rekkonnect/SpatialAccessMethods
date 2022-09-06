@@ -3,6 +3,14 @@ using UnitsNet;
 
 namespace SpatialAccessMethods.FileManagement;
 
+public static class FileManagementHelpers
+{
+    public static void CreateMissingDirectoryForPath(string filePath)
+    {
+        new FileInfo(filePath).Directory?.Create();
+    }
+}
+
 public class ChildBufferController : BufferController, IDisposable
 {
     private bool shouldDispose = true;
@@ -17,6 +25,7 @@ public class ChildBufferController : BufferController, IDisposable
 
     public ChildBufferController(string blockFilePath, MasterBufferController masterController)
     {
+        FileManagementHelpers.CreateMissingDirectoryForPath(blockFilePath);
         BlockStream = File.Open(blockFilePath, FileMode.OpenOrCreate);
         EnsureMinimumBlockCount(0);
         MasterBufferController = masterController;

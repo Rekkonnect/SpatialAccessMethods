@@ -17,13 +17,20 @@ public abstract class FailableConsoleCommand : ConsoleCommand
         }
         catch (Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.Error.WriteLine(ex.Message);
-            Console.Error.WriteLine(ex.StackTrace);
-            Console.Error.WriteLine();
-            Console.ResetColor();
-
+            WriteException(ex);
             return Failure;
         }
+    }
+    private static void WriteException(Exception ex)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Error.WriteLine(ex.Message);
+        Console.Error.WriteLine(ex.StackTrace);
+        Console.Error.WriteLine();
+
+        if (ex.InnerException is not null)
+            WriteException(ex.InnerException);
+
+        Console.ResetColor();
     }
 }

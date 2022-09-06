@@ -22,7 +22,7 @@ public abstract class QueryCommand : ConsoleCommand
     public sealed override int Run(string[] remainingArguments)
     {
         var result = PerformQuery().ToArray();
-        Console.WriteLine($"The query returned the following: {result.Length} entries:");
+        Console.WriteLine($"The query returned the following {result.Length} entries:");
         foreach (var entry in result)
         {
             Console.Write("- ");
