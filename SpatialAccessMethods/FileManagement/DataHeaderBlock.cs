@@ -17,7 +17,6 @@ public partial struct DataHeaderBlock : IHeaderBlock
 
     public bool IsDefault => Data is null;
 
-    // TODO: Remove the property as it causes implications?
     public Information BlockSize
     {
         get => BlockSizeBytes.Bytes();

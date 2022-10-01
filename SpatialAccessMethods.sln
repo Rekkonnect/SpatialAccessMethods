@@ -17,7 +17,12 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SpatialAccessMethods.Main",
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SpatialAccessMethods.MainInterface", "SpatialAccessMethods.MainInterface\SpatialAccessMethods.MainInterface.csproj", "{ECF81062-81CA-4CA8-BE6A-951F5B7AE5C3}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SpatialAccessMethods.QualityAssurance", "SpatialAccessMethods.QualityAssurance\SpatialAccessMethods.QualityAssurance.csproj", "{09DA3963-2BA5-4FAE-BBDA-8492CE4D0A4B}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SpatialAccessMethods.QualityAssurance", "SpatialAccessMethods.QualityAssurance\SpatialAccessMethods.QualityAssurance.csproj", "{09DA3963-2BA5-4FAE-BBDA-8492CE4D0A4B}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8F1CB2F7-4989-454C-A2C3-96DC11AA36FA}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

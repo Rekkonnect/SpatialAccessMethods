@@ -1,11 +1,11 @@
 ﻿using Garyon.DataStructures;
 using Garyon.Extensions;
+using Garyon.Extensions.ArrayExtensions;
 using Garyon.Objects;
+using Microsoft.CodeAnalysis;
 using SpatialAccessMethods.FileManagement;
 using SpatialAccessMethods.Utilities;
-using System;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using UnitsNet;
 using UnitsNet.NumberExtensions.NumberToInformation;
 
@@ -15,13 +15,15 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     where TValue : ILocated, IID, IRecordSerializable<TValue>
 {
     private const int treeNodeSize = 256;
-    
-    private readonly SerialIDHandler serialIDHandler; 
-    private Node? root;
+
+    // Current operation reference disposal should ONLY occur in public methods
+    // By design only publicly consumed methods are considered full atomic operations
+    private readonly OperationReferenceFactory operationReferenceFactory = new();
+    private readonly SerialIDHandler serialIDHandler;
 
     public int Order { get; }
 
-    public bool IsEmpty => root is null;
+    public bool IsEmpty => Root is null;
 
     ChildBufferController ISecondaryStorageDataStructure.BufferController => TreeBufferController;
 
@@ -31,6 +33,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     public int Dimensionality => RecordBufferController.HeaderBlock.Dimensionality;
 
     private int nodeCount;
+    private RStarTree<TValue>.Node? root;
 
     public int NodeCount
     {
@@ -39,10 +42,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             if (nodeCount == value)
                 return;
-            
-            nodeCount = value;
-            RecordBufferController.HeaderBlock.TreeNodeCount = value;
 
+            SetNodeCountWithoutResize(value);
             TreeBufferController.ResizeForEntryCount(value);
         }
     }
@@ -53,7 +54,17 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     public int Height => GetHeightForEntryCount(GetEntryCount());
 
-    public Node? Root => root;
+    public Node? Root
+    {
+        get => root;
+        private set
+        {
+            Debug.Assert(value?.ID is null or NodeID.RootID);
+
+            DethroneRoot();
+            root = value;
+        }
+    }
 
     public RStarTree(int order, ChildBufferController treeBufferController, RecordEntryBufferController recordBufferController, MinHeap<int> idGapHeap)
     {
@@ -74,6 +85,36 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     private int GetMaxID() => RecordBufferController.HeaderBlock.MaxTreeNodeID;
     private void SetMaxID(int maxID) => RecordBufferController.HeaderBlock.MaxTreeNodeID = maxID;
     private int GetEntryCount() => RecordBufferController.HeaderBlock.TreeNodeCount;
+
+    private void SetNodeCountWithoutResize(int value)
+    {
+        nodeCount = value;
+        RecordBufferController.HeaderBlock.TreeNodeCount = value;
+    }
+    private void IncreaseNodeCountWithoutResize()
+    {
+        nodeCount++;
+        RecordBufferController.HeaderBlock.TreeNodeCount = nodeCount;
+    }
+    private void DecreaseNodeCountWithoutResize()
+    {
+        nodeCount--;
+        RecordBufferController.HeaderBlock.TreeNodeCount = nodeCount;
+    }
+    private void IncreaseNodeCount()
+    {
+        IncreaseNodeCountWithoutResize();
+        EnsureLengthForNewNode();
+    }
+    private void DecreaseNodeCount()
+    {
+        DecreaseNodeCountWithoutResize();
+        EnsureLengthForNewNode();
+    }
+    private void EnsureLengthForNewNode()
+    {
+        TreeBufferController.EnsureLengthForEntry(nodeCount + 1);
+    }
 
     public LeafNode? LeafContainingValue(Point point, out TValue? value)
     {
@@ -102,11 +143,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     }
     public IEnumerable<LeafNode> LeafsContaining(Point point)
     {
-        if (root is null)
+        if (Root is null)
             yield break;
 
         var queue = new Queue<Node>();
-        queue.Enqueue(root);
+        queue.Enqueue(Root);
         while (queue.Count > 0)
         {
             var current = queue.Dequeue();
@@ -136,8 +177,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     public void Clear()
     {
-        root = null;
+        Root = null;
         NodeCount = 0;
+        RecordBufferController.HeaderBlock.MaxTreeNodeID = 0;
         serialIDHandler.Clear();
     }
 
@@ -145,10 +187,19 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     {
         return LeafsContaining(point).FirstOrDefault();
     }
+    private LeafNode ChooseLeafInsert(Point point)
+    {
+        return ChooseLeaf(point)
+            ?? ChooseSubtree(point);
+    }
 
     private LeafNode ChooseSubtree(TValue entry)
     {
-        var node = root;
+        return ChooseSubtree(entry.Location);
+    }
+    private LeafNode ChooseSubtree(Point location)
+    {
+        var node = Root;
 
         while (true)
         {
@@ -158,12 +209,33 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             var parentNode = node as ParentNode;
             var children = parentNode!.GetChildren().ToArray();
 
-            var comparer = BestSubtreeInfo.IPreferenceScoreComparer.CreateForNodeType(children.First().NodeType);
-            
-            var bestSubtree = new BestSubtreeInfo(entry, comparer);
+            var comparer = BestSubtreeInfo.PreferenceScoreComparer.CreateForNodeType(children.First().NodeType);
+
+            var bestSubtree = new BestSubtreeInfo(location, comparer);
             bestSubtree.RegisterNodes(children);
             node = bestSubtree.BestNode;
         }
+    }
+    private Node ChooseSubtree(int level, Node node)
+    {
+        var currentNode = Root;
+
+        int currentLevel = 0;
+        while (currentLevel <= level)
+        {
+            if (currentNode is LeafNode)
+                return currentNode;
+
+            var parentNode = currentNode as ParentNode;
+            var children = parentNode!.GetChildren().ToArray();
+
+            var comparer = BestSubtreeInfo.PreferenceScoreComparer.CreateForNodeType(children.First().NodeType);
+
+            var bestSubtree = new BestSubtreeInfo(node, comparer);
+            bestSubtree.RegisterNodes(children);
+            currentNode = bestSubtree.BestNode;
+        }
+        return currentNode;
     }
 
     private void ReInsert(int level, Node node)
@@ -244,34 +316,30 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
-    private void OverflowTreatment(object operationReference, int level, Node node)
+    private OverflowTreatmentResult OverflowTreatment(object operationReference, int level, Node node)
     {
-        var stats = OverflowTreatmentStats.ForInstance(operationReference);
-        stats.RecordInvocation(level);
+        var stats = OverflowTreatmentStats.RecordInvocation(operationReference, level);
         if (level > 0 && stats.CounterAtLevel(level) <= 1)
         {
             ReInsert(level, node);
+            return OverflowTreatmentResult.ReInsert;
         }
         else
         {
             Split(level, node);
+            return OverflowTreatmentResult.Split;
         }
+    }
+
+    private enum OverflowTreatmentResult
+    {
+        ReInsert,
+        Split,
     }
 
     private class OverflowTreatmentStats : IDisposable
     {
         private static readonly Dictionary<object, OverflowTreatmentStats> statsMap = new();
-
-        public static OverflowTreatmentStats ForInstance(object reference)
-        {
-            statsMap.TryGetValue(reference, out var stats);
-            if (stats is null)
-            {
-                stats = new(reference);
-                statsMap[reference] = stats;
-            }
-            return stats;
-        }
 
         private readonly object reference;
 
@@ -298,22 +366,59 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public void Dispose()
         {
             statsMap.Remove(reference);
+            GC.SuppressFinalize(this);
         }
+
+        public static OverflowTreatmentStats RecordInvocation(object operationReference, int level)
+        {
+            var stats = ForInstance(operationReference);
+            stats.RecordInvocation(level);
+            return stats;
+        }
+
+        public static OverflowTreatmentStats ForInstance(object reference)
+        {
+            statsMap.TryGetValue(reference, out var stats);
+            if (stats is null)
+            {
+                stats = new(reference);
+                statsMap[reference] = stats;
+            }
+            return stats;
+        }
+    }
+
+    private void DethroneRoot()
+    {
+        if (root is null)
+            return;
+
+        root.ID = AllocateNextID();
+        root.WriteChangesToBuffer();
     }
 
     private void Split(int level, Node node)
     {
-        var d30 = AttemptSplit(0.30);
-        var d40 = AttemptSplit(0.40);
-        var splitDistribution = d40;
+        const double orderRate = 0.40;
+        var splitDistribution = AttemptSplit(orderRate);
 
-        if (d30.OverlapValue < d40.OverlapValue)
-            splitDistribution = d30;
-
-        // We don't care about the right MBR
-        var newCurrentRegion = splitDistribution.LeftMBR;
-        var newNode = node.TrimRegion(newCurrentRegion);
-        // TODO - Insert the new node
+        var leftRegion = splitDistribution.LeftMBR;
+        var rightNode = node.TrimRegion(leftRegion);
+        if (level is 0)
+        {
+            // We split the root, so we need to create a new one
+            var rootRegion = Rectangle.CreateForRectangles(node.Region, rightNode.Region);
+            var newRoot = AllocateNewParentRootNode(Array.Empty<int>(), rootRegion);
+            Root = newRoot;
+            // The dethroned node will have had its ID changed to a newly allocated one
+            newRoot.AddChild(node);
+            newRoot.AddChild(rightNode);
+            IncreaseNodeCount();
+        }
+        else
+        {
+            Insert(level, rightNode);
+        }
 
         RectangleDistribution AttemptSplit(double maxOrderRate)
         {
@@ -364,7 +469,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
         RectangleDistribution ChooseSplitIndex(RectangleDistribution[] rectangleDistributions)
         {
-            return rectangleDistributions.Min(new RectangleDistribution.Comparer())!;
+            return rectangleDistributions.Min(RectangleDistribution.Comparer.Instance)!;
         }
     }
     private int DistributionCount(double maxOrderRate)
@@ -408,6 +513,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public sealed class Comparer : IComparer<RectangleDistribution>
         {
+            public static Comparer Instance { get; } = new();
+            private Comparer() { }
+
 #nullable disable
             public int Compare(RectangleDistribution a, RectangleDistribution b)
             {
@@ -421,20 +529,50 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         }
     }
 
+    private class EntryOrNode
+    {
+        public Optional<TValue> Entry { get; }
+        public Optional<Node> Node { get; }
+
+        public bool IsEntry => Entry.HasValue;
+        public bool IsNode => Node.HasValue;
+
+        public EntryOrNode(TValue entry)
+            : this(entry, default) { }
+
+        public EntryOrNode(Node node)
+            : this(default, node) { }
+
+        private EntryOrNode(Optional<TValue> entry, Optional<Node> node)
+        {
+            Entry = entry;
+            Node = node;
+        }
+
+        public static implicit operator EntryOrNode(TValue value) => new(value);
+        public static implicit operator EntryOrNode(Node node) => new(node);
+    }
+
 #nullable disable
     private class BestSubtreeInfo
     {
-        private readonly IPreferenceScoreComparer preferenceScoreComparer;
-        
-        public TValue Entry { get; }
-        
+        private readonly PreferenceScoreComparer preferenceScoreComparer;
+
+        public Point Location { get; }
+        public EntryOrNode EntryOrNode { get; }
+
         public PreferenceScore Best { get; private set; }
 
         public Node BestNode => Best.Node;
 
-        public BestSubtreeInfo(TValue entry, IPreferenceScoreComparer comparer)
+        public BestSubtreeInfo(EntryOrNode entryOrNode, PreferenceScoreComparer comparer)
         {
-            Entry = entry;
+            EntryOrNode = entryOrNode;
+            preferenceScoreComparer = comparer;
+        }
+        public BestSubtreeInfo(Point location, PreferenceScoreComparer comparer)
+        {
+            Location = location;
             preferenceScoreComparer = comparer;
         }
 
@@ -446,7 +584,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public void RegisterNode(Node node)
         {
-            var preferenceScore = new PreferenceScore(node, Entry);
+            var preferenceScore = InitializePreferenceScore(node);
 
             if (BestNode is null)
             {
@@ -462,27 +600,43 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             Best = preferenceScore;
         }
 
-        public struct LeafChildrenComparer : IPreferenceScoreComparer
+        private PreferenceScore InitializePreferenceScore(Node node)
         {
-            public int Compare(PreferenceScore left, PreferenceScore right)
+            if (EntryOrNode is not null)
+                return new(node, EntryOrNode);
+
+            return PreferenceScore.GetForEntryLocation(node, Location);
+        }
+
+        public sealed class LeafChildrenComparer : PreferenceScoreComparer
+        {
+            public static LeafChildrenComparer Instance { get; } = new();
+            private LeafChildrenComparer() { }
+
+            public override int Compare(PreferenceScore left, PreferenceScore right)
             {
                 int comparison = left.OverlapEnlargement.CompareTo(right.OverlapEnlargement);
                 if (comparison is not 0)
                     return comparison;
 
-                return IPreferenceScoreComparer.CompareAreaAndBelow(left, right);
+                return CompareAreaAndBelow(left, right);
             }
         }
-        public struct ParentChildrenComparer : IPreferenceScoreComparer
+        public sealed class ParentChildrenComparer : PreferenceScoreComparer
         {
-            public int Compare(PreferenceScore left, PreferenceScore right)
+            public static ParentChildrenComparer Instance { get; } = new();
+            private ParentChildrenComparer() { }
+
+            public override int Compare(PreferenceScore left, PreferenceScore right)
             {
-                return IPreferenceScoreComparer.CompareAreaAndBelow(left, right);
+                return CompareAreaAndBelow(left, right);
             }
         }
 
-        public interface IPreferenceScoreComparer : IComparer<PreferenceScore> 
+        public abstract class PreferenceScoreComparer : IComparer<PreferenceScore>
         {
+            public abstract int Compare(PreferenceScore left, PreferenceScore right);
+
             protected static int CompareAreaAndBelow(PreferenceScore left, PreferenceScore right)
             {
                 int comparison = left.AreaEnlargement.CompareTo(right.AreaEnlargement);
@@ -492,10 +646,10 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 return left.Area.CompareTo(right.Area);
             }
 
-            public static IPreferenceScoreComparer CreateForNodeType(NodeType type) => type switch
+            public static PreferenceScoreComparer CreateForNodeType(NodeType type) => type switch
             {
-                NodeType.Leaf => new LeafChildrenComparer(),
-                NodeType.Parent => new ParentChildrenComparer(),
+                NodeType.Leaf => LeafChildrenComparer.Instance,
+                NodeType.Parent => ParentChildrenComparer.Instance,
 
                 _ => null!,
             };
@@ -504,22 +658,52 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public struct PreferenceScore
         {
             public Node Node { get; }
-            
+
             public double OverlapEnlargement { get; private set; }
             public double AreaEnlargement { get; private set; }
             public double Area { get; private set; }
 
-            public PreferenceScore(Node node, TValue entry)
+            private PreferenceScore(Node node)
             {
                 Node = node;
-                Populate(entry);
+            }
+            public PreferenceScore(Node node, EntryOrNode entryOrNode)
+            {
+                Node = node;
+                Populate(entryOrNode);
             }
 
+            private void Populate(EntryOrNode entryOrNode)
+            {
+                if (entryOrNode.IsEntry)
+                {
+                    Populate(entryOrNode.Entry.Value);
+                }
+                else
+                {
+                    Populate(entryOrNode.Node.Value);
+                }
+            }
+
+            private void Populate(Node nextNode)
+            {
+                var newRegion = Node.Region.Expand(nextNode.Region);
+                Populate(newRegion);
+            }
             private void Populate(TValue entry)
+            {
+                Populate(entry.Location);
+            }
+            private void Populate(Point entryLocation)
+            {
+                var newRegion = Node.Region.Expand(entryLocation);
+                Populate(newRegion);
+            }
+
+            private void Populate(Rectangle newRegion)
             {
                 var parent = Node.GetParent();
 
-                var newRegion = Node.Region.Expand(entry.Location);
                 double previousOverlap = parent.GetTotalChildrenOverlappingArea(Node);
                 double newOverlap = parent.GetTotalChildrenOverlappingArea(Node, newRegion);
                 OverlapEnlargement = newOverlap - previousOverlap;
@@ -528,6 +712,13 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 double newArea = newRegion.Volume;
                 AreaEnlargement = newArea - oldArea;
                 Area = newArea;
+            }
+
+            public static PreferenceScore GetForEntryLocation(Node node, Point entryLocation)
+            {
+                var score = new PreferenceScore(node);
+                score.Populate(entryLocation);
+                return score;
             }
         }
     }
@@ -548,27 +739,41 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     private void Insert(int level, Node node)
     {
-        // This presumably does something
+        int parentLevel = level - 1;
+        var subtree = ChooseSubtree(parentLevel, node);
+        if (subtree is not ParentNode parentSubtree)
+        {
+            throw new InvalidDataException("The returned subtree was expected to be a parent node.");
+        }
+
+        if (parentSubtree.IsFull)
+        {
+            var result = OverflowTreatment(operationReferenceFactory.CurrentOrNext(), parentLevel, parentSubtree);
+            if (result is OverflowTreatmentResult.Split)
+            {
+                // Adjust the parent node's MBR?
+            }
+        }
+
+        parentSubtree.AddChild(node);
+        IncreaseNodeCount();
     }
 
     public void Insert(TValue value)
     {
-        if (root is null)
+        if (Root is null)
             InitializeRoot(value);
 
-        var leaf = ChooseLeaf(value.Location);
+        var containingLeaf = ChooseLeafInsert(value.Location);
 
-        // First handle the case where the leaf is full
-        if (leaf.IsFull)
+        if (containingLeaf.IsFull)
         {
-            // Split accordingly
+            OverflowTreatment(operationReferenceFactory.CurrentOrNext(), Height, containingLeaf);
         }
-        else
-        {
-            // Ensure the leaf contains
-            leaf.EnsureRegionContains(value.Location);
-        }
-        // TODO
+
+        containingLeaf.AddEntry(value);
+
+        operationReferenceFactory.DisposeCurrent();
     }
 
     public bool Remove(Point point)
@@ -582,7 +787,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         Debug.Assert(removed);
 
         CondenseTree(leaf);
-        
+
+        operationReferenceFactory.DisposeCurrent();
         return true;
     }
     public bool Remove(TValue value)
@@ -644,6 +850,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             }
 
             serialIDHandler.DeallocateID(TreeBufferController, eliminatedNode.ID);
+            DecreaseNodeCount();
         }
     }
 
@@ -656,7 +863,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     public void BulkLoad(IEnumerable<TValue> entries)
     {
         // Average capacity arbitrarily picked as 70%
-        // to avoid needing to immediately split/reinsert after insertion
+        // to avoid overflows soon after constructing the tree
         const double averageCapacity = 0.70;
 
         if (!IsEmpty)
@@ -667,38 +874,80 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         for (int i = 0; i < entryArray.Length; i++)
             entryArray[i].ID = i;
 
-        double maxEntriesPerNode = Math.Floor(entryArray.Length / averageCapacity);
-        int height = GetHeightForEntryCount(entryArray.Length, averageCapacity);
-        int nodeCount = (int)Math.Ceiling(Math.Pow(maxEntriesPerNode, height)); // Why the fuck am I doing that
-        TreeBufferController.EnsureLengthForEntry(nodeCount);
-        
+        int cappedOrder = (int)Math.Ceiling(Order * averageCapacity);
+        // Using List instead of Stack for the freedom of exploring the intermediate nodes
+        var levelNodeCounts = new List<int>();
+        int currentLevelNodes = entryArray.Length;
+        while (currentLevelNodes > Order)
+        {
+            int nextLevelNodes = currentLevelNodes / cappedOrder;
+            levelNodeCounts.Add(nextLevelNodes);
+            currentLevelNodes = nextLevelNodes;
+        }
+        // Create a new root if the top level has more than one nodes
+        if (currentLevelNodes > 1)
+        {
+            levelNodeCounts.Add(1);
+        }
+
+        // **If we exclude the reallocation of the list in capacity > current**
+        // n * Insert(0, value)        is O(n^2)
+        // n * Add(value) + Reverse()  is O(n)
+        levelNodeCounts.Reverse();
+
+        int totalNodeCount = levelNodeCounts.Sum();
+        NodeCount = totalNodeCount;
+
         int dimensionality = RecordBufferController.HeaderBlock.Dimensionality;
-        int treeHeight = GetHeightForEntryCount(entryArray.Length);
-        int slabCount = (int)Math.Ceiling(Math.Pow(nodeCount, 1D / dimensionality));
+        int treeHeight = levelNodeCounts.Count;
 
-        StableSortEntryArray(entryArray, 0);
-        var childrenDesignNodes = CreateDesignNodes(entryArray, slabCount, NodeID.Root);
-
-        var rootChildrenIDs = childrenDesignNodes.Select(node => node.ID);
         var rootRectangle = Rectangle.CreateForPoints(entryArray.Select(entry => entry.Location).ToArray());
-        root = new ParentNode(this, NodeID.Root, NodeID.Null, rootChildrenIDs, rootRectangle);
+        var axisRanges = AxisRange.Ranges(rootRectangle).SortBy(AxisRange.RangeComparer.Instance.Invert()).Reverse();
 
-        BulkLoadSlab(childrenDesignNodes, BulkLoadArguments.Initial(dimensionality, treeHeight, slabCount));
+        StableSortEntryArray(entryArray, axisRanges, 0);
 
-        NodeCount = entryArray.Length;
+        // Allocate it beforehand to make sure that it is not being used elsewhere
+        int rootID = AllocateNextID();
+        Debug.Assert(rootID is NodeID.RootID);
+
+        if (treeHeight > 1)
+        {
+            int rootChildrenCount = levelNodeCounts[1];
+            var childrenDesignNodes = CreateDesignNodes(entryArray, rootChildrenCount, NodeID.Root);
+
+            var rootChildrenIDs = childrenDesignNodes.Select(node => node.ID);
+            Root = AllocateNewParentRootNode(rootChildrenIDs, rootRectangle);
+
+            BulkLoadSlab(childrenDesignNodes, axisRanges, BulkLoadArguments.Initial(dimensionality, treeHeight, levelNodeCounts));
+        }
+        else
+        {
+            var entryIDs = entryArray.Select(e => e.ID);
+            Root = AllocateNewLeafRootNode(entryIDs, rootRectangle);
+        }
     }
 
-    private static TValue[] StableSortEntryArray(TValue[] entryArray, int coordinate)
+    private static TValue[] StableSortEntryArray(TValue[] entryArray, AxisRange[] axisRanges, int coordinate)
     {
-        var comparer = new Point.CoordinateComparer(coordinate);
+        var comparer = Point.CoordinateComparer.ForDimension((int)axisRanges[coordinate].Axis);
         return entryArray.SortBy(new ILocated.LocationComparer<TValue, Point.CoordinateComparer>(comparer));
     }
 
-    // I don't think I have the necessary patience for this
-    private void BulkLoadSlab(IEnumerable<BulkDesignNode> designNodes, BulkLoadArguments arguments)
+    [Conditional("DEBUG")]
+    private void AssertNodeProperlyWritten(Node node)
     {
-        var designNodeArray = designNodes.ToArray();
-        int rectangleCount = designNodeArray.Length;
+        var readNode = GetNode(node.ID)!;
+
+        Debug.Assert(readNode.ID == node.ID, "Read a wrong node ID for specified node");
+        Debug.Assert(readNode.NodeType == node.NodeType, "Read a wrong node type for specified node");
+        Debug.Assert(readNode.Region == node.Region, "Read a wrong region for specified node");
+        Debug.Assert(readNode.ChildrenIDs.SetEquals(node.ChildrenIDs), "Read a wrong children IDs for specified node");
+    }
+
+    // I don't think I have the necessary patience for this
+    private void BulkLoadSlab(IEnumerable<BulkDesignNode> designNodes, AxisRange[] axisRanges, BulkLoadArguments arguments)
+    {
+        var designNodeArray = designNodes.ToExistingOrNewArray();
 
         if (arguments.HasReachedLeafLevel)
         {
@@ -709,6 +958,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 // Explicitly write the changes to the buffer, for the nodes will not be further processed
                 node.WriteUponDestruction = false;
                 node.WriteChangesToBuffer();
+
+                AssertNodeProperlyWritten(node);
             }
 
             return;
@@ -717,38 +968,81 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         var nextArguments = arguments.NextIteration();
         foreach (var designNode in designNodeArray)
         {
-            var entryArray = designNode.EntryIDs.Select(GetEntry).ToArray();
-            StableSortEntryArray(entryArray, arguments.CurrentDimension);
-            var childrenDesignNodes = CreateDesignNodes(entryArray, arguments.SlabCount, designNode.ID);
+            var entryArray = designNode.GetAllEntriesArray(this);
+            StableSortEntryArray(entryArray, axisRanges, arguments.CurrentDimension);
+            var childrenDesignNodes = CreateDesignNodes(entryArray, arguments.ChildLevelNodeCount, designNode.ID);
             var finalized = designNode.FinalizeAsParentNode(this, childrenDesignNodes);
 
             // Then, for each formed slab, create a parent node representing it that will eventually contain nodes
-            BulkLoadSlab(childrenDesignNodes, nextArguments);
+            BulkLoadSlab(childrenDesignNodes, axisRanges, nextArguments);
         }
     }
 
-    private record struct BulkLoadArguments(int CurrentDimension, int Dimensionality, int TreeHeight, int SlabCount, int CurrentDepth)
+    private record struct AxisRange(Axis Axis, double Min, double Max)
     {
-        public bool HasReachedLeafLevel => CurrentDepth >= TreeHeight - 1;
+        public double Range => Max - Min;
+
+        public static AxisRange[] Ranges(Rectangle rectangle)
+        {
+            var ranges = new AxisRange[rectangle.Rank];
+            for (int i = 0; i < ranges.Length; i++)
+            {
+                ref var range = ref ranges[i];
+
+                range.Axis = (Axis)i;
+                range.Min = rectangle.MinPoint.GetCoordinate(i);
+                range.Max = rectangle.MaxPoint.GetCoordinate(i);
+            }
+
+            return ranges;
+        }
+        public static AxisRange[] Ranges(IEnumerable<Point> points)
+        {
+            return Ranges(Rectangle.CreateForPoints(points.ToArray()));
+        }
+
+        public sealed class RangeComparer : IComparer<AxisRange>
+        {
+            public static RangeComparer Instance { get; } = new();
+            private RangeComparer() { }
+
+            public int Compare(AxisRange left, AxisRange right)
+            {
+                return left.Range.CompareTo(right.Range);
+            }
+        }
+    }
+
+    private record struct BulkLoadArguments(int CurrentDimension, int Dimensionality, int TreeHeight, IReadOnlyList<int> LevelNodeCounts, int CurrentLevel)
+    {
+        public bool HasReachedLeafLevel => CurrentLevel >= TreeHeight - 1;
+
+        public int CurrentLevelNodeCount => LevelNodeCounts[CurrentLevel];
+        public int ChildLevelNodeCount => LevelNodeCounts[CurrentLevel + 1];
 
         public BulkLoadArguments NextIteration()
         {
             return this with
             {
-                CurrentDimension = (CurrentDimension + 1) % Dimensionality,
-                CurrentDepth = CurrentDepth + 1,
+                CurrentDimension = NextMod(CurrentDimension, Dimensionality),
+                CurrentLevel = CurrentLevel + 1,
             };
         }
-        
-        public static BulkLoadArguments Initial(int dimensionality, int treeHeight, int slabCount)
+
+        public static BulkLoadArguments Initial(int dimensionality, int treeHeight, IReadOnlyList<int> levelNodeCounts)
         {
-            return new(0, dimensionality, treeHeight, slabCount, 0);
+            return new(0, dimensionality, treeHeight, levelNodeCounts, 1);
+        }
+
+        private static int NextMod(int initial, int max)
+        {
+            return (initial + 1) % max;
         }
     }
 
-    private ICollection<BulkDesignNode> CreateDesignNodes(TValue[] entryArray, int slabCount, int parentID)
+    private ICollection<BulkDesignNode> CreateDesignNodes(TValue[] entryArray, int nodeCount, int parentID)
     {
-        var chunks = entryArray.ToChunks(slabCount).ToArray();
+        var chunks = entryArray.ToChunks(nodeCount).ToArray();
 
         var childrenDesignNodes = new List<BulkDesignNode>();
         foreach (var chunk in chunks)
@@ -765,17 +1059,18 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             return Enumerable.Empty<TValue>();
 
         var subordinateExtremum = dominatingExtremum.Opposing();
-        var origin = root!.Region.ExtremumPoint(dominatingExtremum);
+        var origin = Root!.Region.ExtremumPoint(dominatingExtremum);
 
-        var nodeQueue = new PriorityQueue<Monad<Node, TValue>, double>();
+        var nodeQueue = new PriorityQueue<EntryOrNode, double>();
 
         var result = new List<TValue>();
 
-        while (nodeQueue.Count > 0)        
+        while (nodeQueue.Count > 0)
         {
             var dequeued = nodeQueue.Dequeue();
-            if (dequeued is { First: Node node })
+            if (dequeued.IsNode)
             {
+                var node = dequeued.Node.Value;
                 if (node is LeafNode leaf)
                 {
                     var entries = leaf.GetEntries();
@@ -786,7 +1081,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 else
                 {
                     var parent = node as ParentNode;
-                    
+
                     var children = parent!.GetChildren();
                     var dominatingNodes = DominatingNodes(children);
                     foreach (var child in dominatingNodes)
@@ -795,7 +1090,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             }
             else
             {
-                var entry = dequeued.Second!;
+                var entry = dequeued.Entry.Value;
                 foreach (var existingEntry in result)
                 {
                     var domination = existingEntry.Location.ResolveDomination(entry.Location, dominatingExtremum);
@@ -807,14 +1102,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 }
 
                 result.Add(entry);
-            
+
             nextDequeue:
                 continue;
             }
         }
 
         return result;
-        
+
         IEnumerable<TValue> DominatingEntries(IEnumerable<TValue> entries)
         {
             var comparer = new Point.OriginDistanceComparer(origin);
@@ -863,13 +1158,13 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     private IEnumerable<LeafNode> GetAllLeafs()
     {
-        if (root is null)
+        if (Root is null)
             return Enumerable.Empty<LeafNode>();
 
-        if (root is LeafNode leaf)
+        if (Root is LeafNode leaf)
             return new[] { leaf };
 
-        return GetAllLeafs((root as ParentNode)!);
+        return GetAllLeafs((Root as ParentNode)!);
     }
     private IEnumerable<LeafNode> GetAllLeafs(ParentNode node)
     {
@@ -898,7 +1193,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         if (point.Rank != Dimensionality)
             throw new InvalidOperationException("The given point's rank must match that of the contained entries'.");
 
-        if (root is null)
+        if (Root is null)
         {
             return Enumerable.Empty<TValue>();
         }
@@ -911,7 +1206,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         var nnHeap = new InMemory.MinHeap<NearestNeighborEntry>();
 
-        if (root is ParentNode parentRoot)
+        if (Root is ParentNode parentRoot)
         {
             // This algorithm makes so much sense in my brain
             // I wonder if it's the one in the paper
@@ -1010,7 +1305,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
             return nnHeap.Select(e => e.Entry);
         }
-        else if (root is LeafNode leafRoot)
+        else if (Root is LeafNode leafRoot)
         {
             var entries = leafRoot.GetEntries().ToArray();
 
@@ -1046,12 +1341,12 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         var result = new List<TValue>();
 
         var nodeQueue = new Queue<Node>();
-        nodeQueue.Enqueue(root!);
+        nodeQueue.Enqueue(Root!);
 
         while (nodeQueue.Count > 0)
         {
             var iteratedNode = nodeQueue.Dequeue();
-            
+
             switch (iteratedNode)
             {
                 case LeafNode leaf:
@@ -1074,13 +1369,13 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     /// <summary>Verifies the integrity of the tree by ensuring valid children counts and the rectangles being proper MBRs.</summary>
     public bool VerifyIntegrity()
     {
-        if (root is null)
+        if (Root is null)
             return true;
 
-        if (!root.IsRoot)
+        if (!Root.IsRoot)
             return false;
 
-        return VerifyIntegrity(root);
+        return VerifyIntegrity(Root);
     }
     private bool VerifyIntegrity(Node node)
     {
@@ -1104,27 +1399,34 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                     if (!sane)
                         return false;
                 }
-                return true;
+                break;
 
             case LeafNode leaf:
                 foreach (var entry in leaf.GetEntries())
                 {
+                    Debug.Assert(!entry.Location.IsInvalid, $"The entry with ID {entry.ID} in leaf node with ID {leaf.ID} had an invalid location.");
+
                     bool contained = leaf.Region.Contains(entry.Location, true);
                     if (!contained)
                         return false;
                 }
-                return true;
-                
-                // Unexpected node type
+                break;
+
+            // Unexpected node type
             default:
                 return false;
         }
+
+        if (node.ShouldMerge || node.ShouldSplit)
+            return false;
+
+        return true;
     }
 
     private class BulkDesignNode
     {
         public readonly SortedSet<int> EntryIDs = new();
-        
+
         public int ID { get; set; }
         public int ParentID { get; set; }
 
@@ -1155,11 +1457,17 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             return new(tree, ID, ParentID, childrenDesignNodes.Select(child => child.ID), Region);
         }
+
+        public TValue[] GetAllEntriesArray(RStarTree<TValue> tree)
+        {
+            return EntryIDs.Select(tree.GetEntry).ToArray();
+        }
     }
 
     private void InitializeRoot(TValue value)
     {
-        root = new LeafNode(this, NodeID.Root, NodeID.Null, Enumerable.Empty<int>(), Rectangle.FromSinglePoint(value.Location));
+        Root = AllocateNewLeafRootNode(Enumerable.Empty<int>(), Rectangle.FromSinglePoint(value.Location));
+        NodeCount = 1;
     }
 
     private LazyNode? GetLazyNode(int id) => GetLazyNode(new NodeID(id));
@@ -1176,7 +1484,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     {
         if (id.IsNull)
             return null;
-        
+
         var dataSpan = TreeBufferController.LoadDataSpan(id);
         return Node.ParseFromTree(this, dataSpan, id);
     }
@@ -1199,10 +1507,21 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         return new ParentNode(this, newID, parentID, childrenIDs, region);
     }
 
-    internal delegate TNode NewNodeAllocator<TNode>(int parentID, IEnumerable<int> childrenIDs, Rectangle region)
-        where TNode : Node; 
+    // These methods assume that RootID has been allocated beforehand
+    // This could be improved in the ID allocator such that RootID is always assumed allocated
+    // There is not enough time to mess with that
+    private LeafNode AllocateNewLeafRootNode(IEnumerable<int> childrenIDs, Rectangle region)
+    {
+        return new LeafNode(this, NodeID.Root, NodeID.Null, childrenIDs, region);
+    }
+    private ParentNode AllocateNewParentRootNode(IEnumerable<int> childrenIDs, Rectangle region)
+    {
+        return new ParentNode(this, NodeID.Root, NodeID.Null, childrenIDs, region);
+    }
 
-    // Ref-able properties would be healthy here
+    internal delegate TNode NewNodeAllocator<TNode>(int parentID, IEnumerable<int> childrenIDs, Rectangle region)
+        where TNode : Node;
+
     private int AllocateNextID()
     {
         return serialIDHandler.AllocateNextID(TreeBufferController);
@@ -1221,7 +1540,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     public class RStarTreeBufferController : EntryBufferController
     {
         private readonly RStarTree<TValue> tree;
-        
+
         protected override Information EntrySize => treeNodeSize.Bytes();
         public override Information BlockSize => tree.RecordBufferController.HeaderBlock.BlockSize;
 
@@ -1240,7 +1559,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     public abstract class Node : IID
     {
         protected internal SortedSet<int> ChildrenIDs;
-        
+
         public RStarTree<TValue> Tree { get; }
 
         public virtual Rectangle Region { get; protected set; }
@@ -1255,7 +1574,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             set => throw null!;
         }
 
-        public int ID { get; }
+        public int ID { get; internal set; }
         public NodeID ParentID { get; set; }
 
         // TODO: Reconsider non-abstract
@@ -1272,8 +1591,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                                   ChildrenIDs.Count: 0,
                               };
 
-        public bool ShouldMerge => ChildrenIDs.Count < Tree.MinChildren;
-        public bool ShouldSplit => ChildrenIDs.Count > Tree.MinChildren;
+        public bool ShouldMerge => !IsRoot && ChildrenIDs.Count < Tree.MinChildren;
+        public bool ShouldSplit => ChildrenIDs.Count > Tree.MaxChildren;
 
         protected Node(RStarTree<TValue> tree, int id, int parentID, IEnumerable<int> childrenIDs, Rectangle region)
             : this(tree, id)
@@ -1301,7 +1620,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             if (this is not LeafNode)
                 return this;
-            
+
             return Tree.GetNode(ID)!;
         }
 
@@ -1325,17 +1644,17 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
             return Tree.GetNode(ParentID) as ParentNode;
         }
-        
+
         public void SwapParent()
         {
             var parentNode = Tree.GetNode(ParentID);
             if (parentNode is null)
                 return;
-            
+
             UpdateParent(parentNode.ParentID);
             parentNode.UpdateParent(ID);
         }
-        
+
         public void UpdateParent(ParentNode? node)
         {
             UpdateParent(node?.ID ?? NodeID.Null);
@@ -1351,18 +1670,40 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             newParentNode?.ChildrenIDs.Add(ID);
         }
 
-        public void EnsureRegionContains(Point point)
+        public void ExpandRegion(Point newPoint)
         {
-            Region = Region.Expand(point);
+            var newRegion = Region.Expand(newPoint);
+            PropagateExpansion(newRegion);
+        }
+        public void ExpandRegion(Rectangle newRectangle)
+        {
+            var newRegion = Region.Expand(newRectangle);
+            PropagateExpansion(newRegion);
+        }
+
+        private void PropagateExpansion(Rectangle newRegion)
+        {
+            if (Region == newRegion)
+                return;
+
+            Region = newRegion;
+
+            var lazyParent = GetLazyParent();
+            if (lazyParent is null)
+                return;
+
+            lazyParent.ExpandRegion(newRegion);
         }
 
         public abstract IEnumerable<Rectangle> GetChildrenRectangles();
 
         public abstract void RefreshMBR();
 
+        /// <summary>Trims the region of this node and creates a new node containing the excluded children.</summary>
+        /// <param name="newRegion">The new region of this node. It cannot be a superset of the current region.</param>
+        /// <returns>The newly created node containing the excluded children after this node's trimming.</returns>
         public abstract Node TrimRegion(Rectangle newRegion);
 
-        // TODO: Due to the algorithm being abstracted, apply the same algorithm used in the lazy node
         public virtual void WriteChangesToBuffer()
         {
             Debug.Assert(ChildrenIDs.Count <= Tree.MaxChildren, "Attempted to serialize a node with more children than the max allowed.");
@@ -1446,16 +1787,16 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             double[] min = new double[dimensions];
             for (int i = 0; i < dimensions; i++)
                 min[i] = reader.ReadValue<float>();
-            
+
             double[] max = new double[dimensions];
             for (int i = 0; i < dimensions; i++)
                 max[i] = reader.ReadValue<float>();
-            
+
             var region = Rectangle.FromVertices(new(min), new(max));
 
             byte typeAndChildrenByte = reader.ReadValue<byte>();
             var (nodeType, childrenCount) = TypeAndChildren.FromByte(typeAndChildrenByte);
-            
+
             var childrenArray = ChildrenIDArrayPool.Array;
             var childrenSpan = new ArraySegment<int>(childrenArray, 0, childrenCount);
             for (int i = 0; i < childrenCount; i++)
@@ -1480,6 +1821,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             // Locally cache the values
             inside = inside.ToList(ChildrenCount);
             outside = outside.ToList(ChildrenCount);
+            Region = newRegion;
 
             ChildrenIDs = new(inside.Select(c => c.ID));
             return allocator(ParentID, outside.Select(c => c.ID), newRegion);
@@ -1549,7 +1891,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 return ChildrenIDs!;
             }
         }
-        
+
         public override NodeType NodeType
         {
             get
@@ -1676,7 +2018,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     public sealed class ParentNode : Node
     {
         public override NodeType NodeType => NodeType.Parent;
-        
+
         public override int ChildrenCount => ChildrenIDs.Count;
 
         public ParentNode(RStarTree<TValue> tree, int id, int parentID, IEnumerable<int> childrenIDs, Rectangle region)
@@ -1752,6 +2094,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         {
             ChildrenIDs.Add(childNode.ID);
             childNode.UpdateParent(this);
+            ExpandRegion(childNode.Region);
         }
 
         public override IEnumerable<Rectangle> GetChildrenRectangles()
@@ -1765,7 +2108,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public int EntryCount => ChildrenIDs.Count;
 
         public override NodeType NodeType => NodeType.Leaf;
-        
+
         public LeafNode(RStarTree<TValue> tree, int id, int parentID, IEnumerable<int> childrenIDs, Rectangle region)
             : base(tree, id, parentID, childrenIDs, region)
         {
@@ -1790,6 +2133,12 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public IEnumerable<TValue> GetEntries() => ChildrenIDs.Select(Tree.GetEntry);
 
         public TValue? ValueAt(Point point) => GetEntries().FirstOrDefault(entry => entry.Location == point);
+
+        public void AddEntry(TValue entry)
+        {
+            ChildrenIDs.Add(entry.ID);
+            ExpandRegion(entry.Location);
+        }
 
         public override IEnumerable<Rectangle> GetChildrenRectangles()
         {
@@ -1821,25 +2170,42 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     public record struct NodeID(int ID)
     {
-        // It is considered that the root ID is 1
-        private const int rootID = 1;
+        public const int RootID = 1;
         private const int nullID = 0;
 
         public static readonly NodeID Null = new(nullID);
-        public static readonly NodeID Root = new(rootID);
+        public static readonly NodeID Root = new(RootID);
 
         public bool IsNull => ID <= nullID;
-        public bool IsRoot => ID is rootID;
+        public bool IsRoot => ID is RootID;
 
         public static implicit operator NodeID(int id) => new(id);
         public static implicit operator int(NodeID id) => id.ID;
     }
-    
+
     public enum NodeType
     {
         Unknown = -1,
 
         Parent = 0,
         Leaf,
+    }
+
+    private class OperationReferenceFactory
+    {
+        private object? current;
+
+        public void DisposeCurrent()
+        {
+            current = null;
+        }
+        public object ForceNext()
+        {
+            return current = new();
+        }
+        public object CurrentOrNext()
+        {
+            return current ?? ForceNext();
+        }
     }
 }

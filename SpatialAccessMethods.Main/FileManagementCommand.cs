@@ -35,11 +35,13 @@ Usage example: `dbfiles -t "table" -i "index"`
     }
     private Action GetActionForCurrentMode()
     {
+#pragma warning disable CS8524 // The switch expression does not handle some values of its input type (it is not exhaustive) involving an unnamed enum value.
         return Mode switch
         {
             ActionMode.Set => SetFileNames,
             ActionMode.View => ViewFileNames,
         };
+#pragma warning restore CS8524 // The switch expression does not handle some values of its input type (it is not exhaustive) involving an unnamed enum value.
     }
     private void SetFileNames()
     {

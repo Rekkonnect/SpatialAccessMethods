@@ -11,7 +11,7 @@ public static class FileManagementHelpers
     }
 }
 
-public class ChildBufferController : BufferController, IDisposable
+public class ChildBufferController : BufferController, IDisposable, IEquatable<ChildBufferController>
 {
     private bool shouldDispose = true;
     public readonly Stream BlockStream;
@@ -93,5 +93,11 @@ public class ChildBufferController : BufferController, IDisposable
     public DataBlock LoadBlock(int id)
     {
         return MasterBufferController.Load(this, id);
+    }
+
+    public bool Equals(ChildBufferController? other)
+    {
+        return BlockSizeBytes == other?.BlockSizeBytes
+            && BlockStream == other?.BlockStream;
     }
 }

@@ -110,7 +110,7 @@ public struct Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, I
     public static Rectangle CreateForPoints(params Point[] points)
     {
         if (points.Length is 0)
-            throw new ArgumentException("There points array should not be empty.");
+            throw new ArgumentException("The points array should not be empty.");
 
         if (points.Length is 1)
             return new(points[0], points[0]);
@@ -140,7 +140,14 @@ public struct Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, I
 
         var minPoint = new Point(min);
         var maxPoint = new Point(max);
-        return new Rectangle(minPoint, maxPoint);
+        var result = new Rectangle(minPoint, maxPoint);
+
+        foreach (var point in points)
+        {
+            Debug.Assert(result.Contains(point, true));
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -170,7 +177,14 @@ public struct Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, I
             points[i * 2] = rectangles[i].MinPoint;
             points[i * 2 + 1] = rectangles[i].MaxPoint;
         }
-        return CreateForPoints(points);
+        var result = CreateForPoints(points);
+
+        foreach (var rectangle in rectangles)
+        {
+            Debug.Assert(result.Contains(rectangle, true));
+        }
+
+        return result;
     }
 
     public double MinDistanceFrom(Point point)
@@ -342,6 +356,22 @@ public struct Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, I
         return CreateForPoints(MinPoint, point, MaxPoint);
     }
 
+    /// <summary>Returns an expanded version of this hyper-rectangle that also contains the given hyper-rectangle.</summary>
+    /// <param name="rectangle">The hyper-rectangle to also contain in the expanded hyper-rectangle.</param>
+    /// <returns>
+    /// A hyper-rectangle that is an expansion of this one that also includes the given hyper-rectangle. If the
+    /// hyper-rectangle is already contained in this hyper-rectangle, this existing instance is returned.
+    /// Otherwise, a new hyper-rectangle is created with its dimensions expanded accordingly.
+    /// </returns>
+    /// <exception cref="ArgumentException">Thrown when the hyper-rectangles' ranks do not match.</exception>
+    public Rectangle Expand(Rectangle rectangle)
+    {
+        if (Contains(rectangle, true))
+            return this;
+
+        return CreateForRectangles(this, rectangle);
+    }
+
     // Really annoying how the code seems copy-pasted
     public Rectangle Union(Rectangle other)
     {
@@ -401,6 +431,10 @@ public struct Rectangle : IDominable<Rectangle>, IOverlappableWith<Rectangle>, I
     public override int GetHashCode()
     {
         return HashCode.Combine(MinPoint, MaxPoint);
+    }
+    public override string ToString()
+    {
+        return $"[{MinPoint} / {MaxPoint}]";
     }
 
     public static bool operator ==(Rectangle left, Rectangle right) => left.Equals(right);

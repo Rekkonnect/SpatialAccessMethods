@@ -8,6 +8,9 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
 {
     private readonly MapRecordEntryCollection entries = new();
 
+    private const int generatedEntryCount = 1500;
+    private const int insertedEntryCount = 250;
+
     [OneTimeSetUp]
     public void OneTimeSetup()
     {
@@ -29,17 +32,24 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
         GenerateBulkLoad(dimensionality);
 
         Assert.That(Table.RecordCount, Is.EqualTo(entries.Length));
-        Assert.That(Table.HeaderBlock.TreeNodeCount, Is.EqualTo(entries.Length));
         Assert.That(Table.IndexTree.Root!.Region, Is.EqualTo(entries.MBR));
         Assert.That(Table.VerifyIntegrity(), Is.True);
     }
     private void GenerateBulkLoad(int dimensionality)
     {
-        InitializeTable(dimensionality);
-
-        entries.Generate(dimensionality, 1500);
-
+        InitializeGenerate(dimensionality);
         Table.BulkLoad(entries.Entries);
+    }
+    private void InitializeGenerate(int dimensionality, int entryCount = 0)
+    {
+        if (entryCount is 0)
+        {
+            entryCount = generatedEntryCount;
+        }
+
+        ClearTable();
+        InitializeTable(dimensionality);
+        entries.Generate(dimensionality, entryCount);
     }
 
     [Test]
@@ -62,6 +72,49 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
             var sortedByDistance = sortedEntries.Take(neighborCount).ToHashSet();
 
             Assert.That(sortedByDistance.SetEquals(neighbors), Is.True);
+        }
+    }
+
+    [Test]
+    [TestCase(2)]
+    [TestCase(3)]
+    [TestCase(4)]
+    public void Insert(int dimensionality)
+    {
+        InitializeGenerate(dimensionality, insertedEntryCount);
+
+        var currentRootMBR = new Rectangle();
+        int insertedEntries = 0;
+        AssertCurrentState();
+
+        // Insert first entry
+        var firstEntry = entries.Entries.First();
+        Table.Add(firstEntry);
+        insertedEntries++;
+        currentRootMBR = Rectangle.FromSinglePoint(firstEntry.Location);
+
+        AssertCurrentStateIncludingRootRegion();
+
+        for (int i = 1; i < entries.Length; i++)
+        {
+            var entry = entries.Entries[i];
+            Table.Add(entry);
+            insertedEntries++;
+            currentRootMBR = currentRootMBR.Expand(entry.Location);
+
+            AssertCurrentStateIncludingRootRegion();
+        }
+
+        void AssertCurrentState()
+        {
+            Assert.That(Table.RecordCount, Is.EqualTo(insertedEntries));
+            Assert.That(Table.HeaderBlock.TreeNodeCount, Is.EqualTo(insertedEntries));
+            Assert.That(Table.VerifyIntegrity(), Is.True);
+        }
+        void AssertCurrentStateIncludingRootRegion()
+        {
+            AssertCurrentState();
+            Assert.That(Table.IndexTree.Root!.Region, Is.EqualTo(currentRootMBR));
         }
     }
 }

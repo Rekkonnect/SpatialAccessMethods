@@ -39,10 +39,28 @@ public sealed class SpatialDataTable<TValue>
     private void SetMaxID(int maxID) => HeaderBlock.MaxID = maxID;
     private int GetEntryCount() => HeaderBlock.RecordCount;
 
+    private void IncreaseEntryCount()
+    {
+        int newCount = HeaderBlock.RecordCount + 1;
+        SetEntryCount(newCount);
+    }
+    private void DecreaseEntryCount()
+    {
+        int newCount = HeaderBlock.RecordCount - 1;
+        SetEntryCount(newCount);
+    }
+
+    private void SetEntryCount(int newCount)
+    {
+        HeaderBlock.RecordCount = newCount;
+        EntryBufferController.EnsureLengthForEntry(newCount);
+    }
+
     public void Add(TValue entry)
     {
         int id = AllocateNextID();
 
+        IncreaseEntryCount();
         WriteEntry(entry, id);
         tree.Insert(entry);
     }
@@ -52,6 +70,7 @@ public sealed class SpatialDataTable<TValue>
         
         DeallocateEntry(entry);
         serialIDHandler.PreserveMaxCapableIDGaps();
+        DecreaseEntryCount();
     }
 
     public bool VerifyIntegrity()
@@ -61,6 +80,10 @@ public sealed class SpatialDataTable<TValue>
 
     public void Clear()
     {
+        HeaderBlock.RecordCount = 0;
+        HeaderBlock.MaxID = 0;
+        EntryBufferController.ResizeForEntryCount(0);
+        serialIDHandler.Clear();
         tree.Clear();
     }
 
@@ -162,7 +185,7 @@ public sealed class SpatialDataTable<TValue>
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table);
     }
 
-    public record struct SkylineQuery(Extremum DominatingExtremum) : IQuery
+    public sealed record SkylineQuery(Extremum DominatingExtremum) : IQuery
     {
         // More complex skyline query parameters are not defined for simplicity
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
@@ -170,14 +193,14 @@ public sealed class SpatialDataTable<TValue>
             return table.tree.SkylineQuery(DominatingExtremum);
         }
     }
-    public record struct NearestNeighborQuery(Point Point, int Neighbors) : IQuery
+    public sealed record NearestNeighborQuery(Point Point, int Neighbors) : IQuery
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
         {
             return table.tree.NearestNeighborQuery(Point, Neighbors);
         }
     }
-    public record struct RangeQuery<TShape>(TShape Range) : IQuery
+    public sealed record RangeQuery<TShape>(TShape Range) : IQuery
         where TShape : IShape, IOverlappableWith<Rectangle>
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
@@ -204,7 +227,7 @@ public sealed class SpatialDataTable<TValue>
         return GetAllEntries().Where(entry => range.Contains(entry.Location));
     }
 
-    public record struct SerialRangeQuery<TShape>(TShape Range) : IQuery
+    public sealed record SerialRangeQuery<TShape>(TShape Range) : IQuery
         where TShape : IShape, IOverlappableWith<Rectangle>
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
@@ -222,7 +245,7 @@ public sealed class SpatialDataTable<TValue>
             .Take(neighbors);
     }
 
-    public record struct SerialNearestNeighborQuery(Point Point, int Neighbors) : IQuery
+    public sealed record SerialNearestNeighborQuery(Point Point, int Neighbors) : IQuery
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
         {
@@ -257,7 +280,7 @@ public sealed class SpatialDataTable<TValue>
         return dominatingEntries.Values;
     }
 
-    public record struct SerialSkylineQuery(Extremum DomatingExtremum) : IQuery
+    public sealed record SerialSkylineQuery(Extremum DomatingExtremum) : IQuery
     {
         public IEnumerable<TValue> Perform(SpatialDataTable<TValue> table)
         {

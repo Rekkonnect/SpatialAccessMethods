@@ -5,8 +5,7 @@ public interface ILocated
     public Point Location { get; }
 
 #nullable disable
-    // TODO: Re-evaluate if avoiding boxing is any useful
-    public record struct LocationComparer<TValue, TComparer>(TComparer Comparer) : IComparer<TValue>
+    public sealed record LocationComparer<TValue, TComparer>(TComparer Comparer) : IComparer<TValue>
         where TValue : ILocated
         where TComparer : IComparer<Point>
     {
@@ -16,34 +15,34 @@ public interface ILocated
         }
     }
 
-    public interface IDistanceComparer<TValue> : IComparer<TValue>
+    public abstract record DistanceComparer<TValue>(Point FocalPoint) : IComparer<TValue>
         where TValue : ILocated
     {
-        public Point FocalPoint { get; }
+        public abstract int Compare(TValue a, TValue b);
 
-        public sealed int CompareClosest(TValue x, TValue y)
+        protected int CompareClosest(TValue x, TValue y)
         {
             return x.Location.DistanceFrom(FocalPoint).CompareTo(y.Location.DistanceFrom(FocalPoint));
         }
-        public sealed int CompareFurthest(TValue x, TValue y)
+        protected int CompareFurthest(TValue x, TValue y)
         {
             return -CompareClosest(x, y);
         }
     }
-    public record ClosestDistanceComparer<TValue>(Point FocalPoint) : IDistanceComparer<TValue>
+    public record ClosestDistanceComparer<TValue>(Point FocalPoint) : DistanceComparer<TValue>(FocalPoint)
         where TValue : ILocated
     {
-        public int Compare(TValue x, TValue y)
+        public override int Compare(TValue x, TValue y)
         {
-            return (this as IDistanceComparer<TValue>).CompareClosest(x, y);
+            return CompareClosest(x, y);
         }
     }
-    public record FurthestDistanceComparer<TValue>(Point FocalPoint) : IComparer<TValue>
+    public record FurthestDistanceComparer<TValue>(Point FocalPoint) : DistanceComparer<TValue>(FocalPoint)
         where TValue : ILocated
     {
-        public int Compare(TValue x, TValue y)
+        public override int Compare(TValue x, TValue y)
         {
-            return (this as IDistanceComparer<TValue>).CompareFurthest(x, y);
+            return CompareFurthest(x, y);
         }
     }
 #nullable restore

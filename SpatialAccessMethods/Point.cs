@@ -2,7 +2,7 @@
 using Garyon.Functions;
 using Garyon.Objects;
 using SpatialAccessMethods.Utilities;
-using System.Security.Cryptography;
+using System.Security.AccessControl;
 using System.Text;
 
 namespace SpatialAccessMethods;
@@ -232,12 +232,14 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
     }
 
     /// <summary>Provides a coordinate comparison behavior that compares <seealso cref="Point"/> instances based on their coordinates on the target dimension.</summary>
-    public struct CoordinateComparer : IComparer<Point>
+    public sealed class CoordinateComparer : IComparer<Point>
     {
+        private static readonly LookupList<CoordinateComparer> cachedComparers = new();
+
         /// <summary>The dimension at which the points' coordinates are compared.</summary>
         public int Dimension { get; }
 
-        public CoordinateComparer(int dimension)
+        private CoordinateComparer(int dimension)
         {
             Dimension = dimension;
         }
@@ -246,18 +248,38 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
         {
             return x.GetCoordinate(Dimension).CompareTo(y.GetCoordinate(Dimension));
         }
+
+        public static CoordinateComparer ForDimension(int dimension)
+        {
+            if (dimension < 0)
+                throw new ArgumentException("The dimension cannot be negative");
+
+            var cached = cachedComparers[dimension];
+            if (cached is null)
+            {
+                cached = new(dimension);
+                cachedComparers[dimension] = cached;
+            }
+            return cached;
+        }
     }
     /// <summary>Provides a coordinate sum comparison behavior that compares <seealso cref="Point"/> instances based on the sum of their coordinates.</summary>
-    public struct CoordinateSumComparer : IComparer<Point>
+    public sealed class CoordinateSumComparer : IComparer<Point>
     {
+        public static CoordinateSumComparer Instance { get; } = new();
+        private CoordinateSumComparer() { }
+
         public int Compare(Point x, Point y)
         {
             return x.CoordinateSum.CompareTo(y.CoordinateSum);
         }
     }
     /// <summary>Provides a coordinate product comparison behavior that compares <seealso cref="Point"/> instances based on the product of their coordinates.</summary>
-    public struct CoordinateProductComparer : IComparer<Point>
+    public sealed class CoordinateProductComparer : IComparer<Point>
     {
+        public static CoordinateProductComparer Instance { get; } = new();
+        private CoordinateProductComparer() { }
+
         public int Compare(Point x, Point y)
         {
             return x.CoordinateProduct.CompareTo(y.CoordinateProduct);

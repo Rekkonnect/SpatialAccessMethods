@@ -19,8 +19,8 @@ public abstract class SpatialDataTableQAContainer : FileManagementQAContainer
 
     protected void InitializeTableComponents()
     {
-        var entryStream = new MemoryStream(DatabaseController.DefaultBlockSize.BytesInt32());
-        var treeStream = new MemoryStream(DatabaseController.DefaultBlockSize.BytesInt32());
+        var entryStream = CreateMemoryStream(DatabaseController.DefaultBlockSize.BytesInt32());
+        var treeStream = CreateMemoryStream(DatabaseController.DefaultBlockSize.BytesInt32());
 
         TreeBufferController = new ChildBufferController(treeStream, MasterBufferControlling.Constrained)
         {
