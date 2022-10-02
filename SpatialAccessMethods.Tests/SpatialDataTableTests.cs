@@ -1,4 +1,5 @@
 ﻿using Garyon.Extensions;
+using Garyon.Objects.Enumerators;
 using SpatialAccessMethods.FileManagement;
 using SpatialAccessMethods.QualityAssurance;
 
@@ -9,7 +10,7 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
     private readonly MapRecordEntryCollection entries = new();
 
     private const int generatedEntryCount = 1500;
-    private const int insertedEntryCount = 250;
+    private const int insertedEntryCount = 8250;
 
     [OneTimeSetUp]
     public void OneTimeSetup()
@@ -22,6 +23,9 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
     {
         ClearTable();
     }
+
+    // TODO: Add assertions for the tree node counts satisfying a given range
+    // i.e. nodes at 50% capacity  <=  TreeNodeCount  <=  nodes at 100% capacity
 
     [Test]
     [TestCase(2)]
@@ -83,7 +87,6 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
     {
         InitializeGenerate(dimensionality, insertedEntryCount);
 
-        var currentRootMBR = new Rectangle();
         int insertedEntries = 0;
         AssertCurrentState();
 
@@ -91,7 +94,7 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
         var firstEntry = entries.Entries.First();
         Table.Add(firstEntry);
         insertedEntries++;
-        currentRootMBR = Rectangle.FromSinglePoint(firstEntry.Location);
+        var currentRootMBR = Rectangle.FromSinglePoint(firstEntry.Location);
 
         AssertCurrentStateIncludingRootRegion();
 
@@ -108,7 +111,6 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
         void AssertCurrentState()
         {
             Assert.That(Table.RecordCount, Is.EqualTo(insertedEntries));
-            Assert.That(Table.HeaderBlock.TreeNodeCount, Is.EqualTo(insertedEntries));
             Assert.That(Table.VerifyIntegrity(), Is.True);
         }
         void AssertCurrentStateIncludingRootRegion()
@@ -116,5 +118,13 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
             AssertCurrentState();
             Assert.That(Table.IndexTree.Root!.Region, Is.EqualTo(currentRootMBR));
         }
+
+        // Assert that the correct entries were added
+
+        var tableEntries = Table.GetAllEntries().ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
+        var generatedEntries = entries.Entries.ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
+
+        tableEntries.IntersectWith(generatedEntries);
+        Assert.That(tableEntries.Count, Is.EqualTo(generatedEntries.Count));
     }
 }

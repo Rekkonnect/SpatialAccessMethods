@@ -768,7 +768,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         if (containingLeaf.IsFull)
         {
-            OverflowTreatment(operationReferenceFactory.CurrentOrNext(), Height, containingLeaf);
+            OverflowTreatment(operationReferenceFactory.CurrentOrNext(), Height - 1, containingLeaf);
         }
 
         containingLeaf.AddEntry(value);
@@ -1366,7 +1366,10 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         return result;
     }
 
-    /// <summary>Verifies the integrity of the tree by ensuring valid children counts and the rectangles being proper MBRs.</summary>
+    /// <summary>
+    /// Verifies the integrity of the tree by ensuring that no child node is considered a root one,
+    /// that no non-root node should be merged or split and the rectangles being proper MBRs.
+    /// </summary>
     public bool VerifyIntegrity()
     {
         if (Root is null)
@@ -1375,9 +1378,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         if (!Root.IsRoot)
             return false;
 
-        return VerifyIntegrity(Root);
+        return VerifyIntegrity(Root, false);
     }
-    private bool VerifyIntegrity(Node node)
+    private bool VerifyIntegrity(Node node, bool validateMerging)
     {
         // No node pointed at should be invalid
         if (node.IsInvalid)
@@ -1395,7 +1398,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                     if (!contained)
                         return false;
 
-                    bool sane = VerifyIntegrity(child);
+                    bool sane = VerifyIntegrity(child, true);
                     if (!sane)
                         return false;
                 }
@@ -1417,7 +1420,10 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 return false;
         }
 
-        if (node.ShouldMerge || node.ShouldSplit)
+        if (validateMerging && node.ShouldMerge)
+            return false;
+
+        if (node.ShouldSplit)
             return false;
 
         return true;
@@ -1732,14 +1738,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         protected void WriteRegion(ref SpanStream writer)
         {
             for (int i = 0; i < Region.Rank; i++)
-                writer.WriteValue((float)Region.MinPoint.GetCoordinate(i));
+                writer.WriteValue(Region.MinPoint.GetCoordinate(i));
 
             for (int i = 0; i < Region.Rank; i++)
-                writer.WriteValue((float)Region.MaxPoint.GetCoordinate(i));
+                writer.WriteValue(Region.MaxPoint.GetCoordinate(i));
         }
         protected void SkipRegion(ref SpanStream writer)
         {
-            writer.AdvanceValueRange<float>(2 * Region.Rank);
+            writer.AdvanceValueRange<double>(2 * Region.Rank);
         }
         protected void WriteOrSkipRegion(ref SpanStream writer)
         {
@@ -1761,12 +1767,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         protected void WriteChildrenIDs(ref SpanStream writer)
         {
-            var typeAndChildren = new TypeAndChildren(NodeType, ChildrenIDs.Count);
-            writer.WriteValue(typeAndChildren.SerializedByte);
+            foreach (int childID in ChildrenIDs)
+            {
+                writer.WriteValue(childID);
+            }
         }
         protected void SkipChildrenIDs(ref SpanStream writer)
         {
-            writer.AdvanceValueRange<int>(ChildrenIDs.Count);
+            // This method should do nothing as there is nothing to write after children IDs
         }
         protected void WriteOrSkipChildrenIDs(ref SpanStream writer)
         {
@@ -1786,11 +1794,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             // Cannot simplify to local functions due to Span<byte> being ref struct
             double[] min = new double[dimensions];
             for (int i = 0; i < dimensions; i++)
-                min[i] = reader.ReadValue<float>();
+                min[i] = reader.ReadValue<double>();
 
             double[] max = new double[dimensions];
             for (int i = 0; i < dimensions; i++)
-                max[i] = reader.ReadValue<float>();
+                max[i] = reader.ReadValue<double>();
 
             var region = Rectangle.FromVertices(new(min), new(max));
 
@@ -1843,9 +1851,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         private static class ChildrenIDArrayPool
         {
-            // 62 - 2n,
-            //   where n > 0
-            private const int MaxChildren = 60;
+            // 62 - 4n,
+            //   where n > 1
+            private const int MaxChildren = 54;
             public static readonly int[] Array = new int[MaxChildren];
         }
 
@@ -1972,11 +1980,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             int dimensions = Tree.Dimensionality;
             double[] min = new double[dimensions];
             for (int i = 0; i < dimensions; i++)
-                min[i] = reader.ReadValue<float>();
+                min[i] = reader.ReadValue<double>();
 
             double[] max = new double[dimensions];
             for (int i = 0; i < dimensions; i++)
-                max[i] = reader.ReadValue<float>();
+                max[i] = reader.ReadValue<double>();
 
             region = Rectangle.FromVertices(new(min), new(max));
         }
@@ -2011,7 +2019,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         private int GetOffsetForParentID() => 0;
         private int GetOffsetForRegionCoordinates() => GetOffsetForParentID() + sizeof(int);
-        private int GetOffsetForNodeTypeChildrenCount() => GetOffsetForRegionCoordinates() + 2 * Tree.Dimensionality * sizeof(float);
+        private int GetOffsetForNodeTypeChildrenCount() => GetOffsetForRegionCoordinates() + 2 * Tree.Dimensionality * sizeof(double);
         private int GetOffsetForChildrenIDs() => GetOffsetForNodeTypeChildrenCount() + sizeof(byte);
     }
 

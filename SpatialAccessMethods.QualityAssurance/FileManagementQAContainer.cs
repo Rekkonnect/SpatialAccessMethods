@@ -18,7 +18,7 @@ public abstract class FileManagementQAContainer
         return new MinHeap<T>(bufferController);
     }
 
-    protected static ExpandableMemoryStream CreateMemoryStream(int bytes)
+    protected static MemoryStream CreateMemoryStream(int bytes)
     {
         return new(bytes);
     }

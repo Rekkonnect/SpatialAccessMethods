@@ -2,7 +2,6 @@
 using Garyon.Functions;
 using Garyon.Objects;
 using SpatialAccessMethods.Utilities;
-using System.Security.AccessControl;
 using System.Text;
 
 namespace SpatialAccessMethods;

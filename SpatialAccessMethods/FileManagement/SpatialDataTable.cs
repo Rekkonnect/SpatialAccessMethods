@@ -176,7 +176,7 @@ public sealed class SpatialDataTable<TValue>
 
     private static int TreeOrder(int dimensionality)
     {
-        return 62 - 2 * dimensionality;
+        return 62 - 4 * dimensionality;
     }
 
     // TODO: Perhaps extract those outside
@@ -210,7 +210,7 @@ public sealed class SpatialDataTable<TValue>
     }
 
     #region Naive Algorithms
-    private IEnumerable<TValue> GetAllEntries()
+    public IEnumerable<TValue> GetAllEntries()
     {
         int maxID = HeaderBlock.MaxID;
         for (int id = 1; id <= maxID; id++)

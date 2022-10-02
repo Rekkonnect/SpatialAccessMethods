@@ -1,6 +1,5 @@
 ﻿using SpatialAccessMethods.DataStructures.InMemory;
 using System.Collections;
-using System.Threading.Tasks.Dataflow;
 using UnitsNet;
 using UnitsNet.NumberExtensions.NumberToInformation;
 
@@ -8,6 +7,8 @@ namespace SpatialAccessMethods.FileManagement;
 
 public sealed class MasterBufferController : BufferController
 {
+    private readonly object loadLock = new();
+
     private readonly Information maxBlockMemory;
     private Information currentBlockMemory;
 
@@ -25,31 +26,34 @@ public sealed class MasterBufferController : BufferController
     }
     public DataBlock Load(BlockPosition loadingPosition)
     {
-        bool contained = blockDumpQueueDictionary.TryGetValue(loadingPosition, out var existing);
-        if (contained)
-            return existing;
-
-        // This does not handle the case that the loading block's size
-        // is greater than the limit
-        // Should never be the case under normal usage
-        var blockSize = loadingPosition.BufferController.BlockSize;
-        currentBlockMemory += blockSize;
-        DataBlock? loaded = null;
-
-        while (currentBlockMemory >= maxBlockMemory)
+        lock (loadLock)
         {
-            var dumpedPosition = DumpNextBlock();
-            if (dumpedPosition is null)
-                break;
+            bool contained = blockDumpQueueDictionary.TryGetValue(loadingPosition, out var existing);
+            if (contained)
+                return existing;
 
-            loaded = Swap(dumpedPosition, loadingPosition);
+            // This does not handle the case that the loading block's size
+            // is greater than the limit
+            // Should never be the case under normal usage
+            var blockSize = loadingPosition.BufferController.BlockSize;
+            currentBlockMemory += blockSize;
+            DataBlock? loaded = null;
 
-            currentBlockMemory -= dumpedPosition.BufferController.BlockSize;
+            while (currentBlockMemory >= maxBlockMemory)
+            {
+                var dumpedPosition = DumpNextBlock();
+                if (dumpedPosition is null)
+                    break;
+
+                loaded = Swap(dumpedPosition, loadingPosition);
+
+                currentBlockMemory -= dumpedPosition.BufferController.BlockSize;
+            }
+
+            var loadedValue = loaded ?? ReadRegister(loadingPosition);
+
+            return loadedValue;
         }
-        
-        var loadedValue = loaded ?? ReadRegister(loadingPosition);
-
-        return loadedValue;
     }
     
     public DataBlock LoadUnconstrained(ChildBufferController bufferController, int id)
@@ -167,6 +171,8 @@ public sealed class MasterBufferController : BufferController
             blockDumpQueue.Update(position, block);
         }
         
+        /// <summary>Dequeues the next block position from the queue, but does not remove it from the dictionary.</summary>
+        /// <returns>The dequeued block position from the queue, or <see langword="null"/> if none was present.</returns>
         public BlockPosition? Dequeue()
         {
             return blockDumpQueue.Dequeue();

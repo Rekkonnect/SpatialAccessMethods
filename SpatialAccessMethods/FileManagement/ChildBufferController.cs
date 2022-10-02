@@ -100,4 +100,8 @@ public class ChildBufferController : BufferController, IDisposable, IEquatable<C
         return BlockSizeBytes == other?.BlockSizeBytes
             && BlockStream == other?.BlockStream;
     }
+    public override int GetHashCode()
+    {
+        return BlockStream.GetHashCode() ^ BlockSizeBytes;
+    }
 }
