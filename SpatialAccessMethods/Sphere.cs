@@ -1,4 +1,6 @@
-﻿namespace SpatialAccessMethods;
+﻿using System.Diagnostics;
+
+namespace SpatialAccessMethods;
 
 public struct Sphere : IOverlappableWith<Rectangle>, IOverlappableWith<Sphere>
 {
@@ -23,15 +25,55 @@ public struct Sphere : IOverlappableWith<Rectangle>, IOverlappableWith<Sphere>
     }
     public bool Overlaps(Rectangle rectangle)
     {
+        // The shapes overlap if:
+        // - the center of the sphere is contained in the rectangle
         if (rectangle.Contains(Center, true))
             return true;
 
+        // - the center of the rectangle is contained in the sphere
+        if (Contains(rectangle.Center))
+            return true;
+
+        // - the MBR of the sphere overlaps with the given rectangle
+        var sphereMBR = MBR();
+        if (!sphereMBR.Overlaps(rectangle))
+            return false;
+
+        // - the closest vertex of the rectangle ins contained in the sphere
         var closest = rectangle.ClosestVertexTo(Center);
-        return Contains(closest);
+        if (Contains(closest))
+            return true;
+
+        // - the rectangle contains the edge of the sphere contained
+        //   in the line between the two shapes' centers
+        var centerDistance = Center.DistanceFrom(rectangle.Center, out var centerCoordinateDistance);
+        double scale = Radius / centerDistance;
+        Debug.Assert(scale < 1, "The sphere's radius must be less than the center distance, as the centers being contained was already evaluated");
+        var edgeOffset = centerCoordinateDistance * scale;
+        var edge = Center - edgeOffset;
+        bool rectangleContainsEdge = rectangle.Contains(edge);
+        if (rectangleContainsEdge)
+            return true;
+
+        return false;
+        // Phew I've not touched geometry in a while
     }
     public bool Overlaps(Sphere sphere)
     {
         return Contains(sphere.Center);
+    }
+
+    public Rectangle MBR()
+    {
+        var manhattanDifference = new Point(Rank, Radius);
+        var min = Center - manhattanDifference;
+        var max = Center + manhattanDifference;
+        return Rectangle.FromVertices(min, max);
+    }
+
+    public override string ToString()
+    {
+        return $"{Center} | Radius: {Radius}";
     }
 
     public static Sphere SphereForVolume(Point center, int rank, double targetVolume)

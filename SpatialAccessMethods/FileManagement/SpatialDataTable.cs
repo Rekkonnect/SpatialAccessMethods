@@ -61,7 +61,7 @@ public sealed class SpatialDataTable<TValue>
         int id = AllocateNextID();
 
         IncreaseEntryCount();
-        WriteEntry(entry, id);
+        WriteEntry(ref entry, id);
         tree.Insert(entry);
     }
     public void Remove(TValue entry)
@@ -94,37 +94,18 @@ public sealed class SpatialDataTable<TValue>
 
         var entryArray = entries.ToArray();
         HeaderBlock.MaxID = entryArray.Length;
-        EntryBufferController.EnsureLengthForEntry(entryArray.Length - 1);
+        EntryBufferController.EnsureLengthForEntry(entryArray.Length);
         
-        foreach (var indexedEntry in entryArray.WithIndex())
+        for (int index = 0; index < entryArray.Length; index++)
         {
-            // Do not further complicate the query; for unexpected behavior would cause unnecessary wasted debugging hours
-            WriteEntry(indexedEntry.Current, indexedEntry.Index + 1);
+            int id = index + 1;
+            ref var entry = ref entryArray[index];
+            WriteEntry(ref entry, id);
+            entry.ID = id;
         }
 
         tree.BulkLoad(entryArray);
         HeaderBlock.RecordCount = entryArray.Length;
-    }
-    // Fancy, would be good to use somehow
-    public async Task BulkLoadAsync(IAsyncEnumerable<TValue> entries)
-    {
-        if (RecordCount is not 0)
-            throw new InvalidOperationException("Cannot bulk load a table that already contains records.");
-
-        var loggable = entries.GetAsyncEnumerator().WithStoringEnumerated();
-        int index = 0;
-        // Ugly because of miscommuncation between the responsibilities of an enumerable and its enumerator
-        while (await loggable.MoveNextAsync())
-        {
-            // Could be improved, minding when to ensure the length for the entry
-            EntryBufferController.EnsureLengthForEntry(index - 1);
-            WriteEntry(loggable.Current, index);
-            index++;
-        }
-
-        HeaderBlock.MaxID = index;
-
-        tree.BulkLoad(loggable.GetStoredValues());
     }
 
     private int AllocateNextID()
@@ -156,7 +137,7 @@ public sealed class SpatialDataTable<TValue>
         entry.Deallocate(span);
     }
 
-    private void WriteEntry(TValue entry, int id)
+    private void WriteEntry(ref TValue entry, int id)
     {
         entry.ID = id;
         WriteEntry(entry);

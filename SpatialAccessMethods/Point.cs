@@ -29,7 +29,7 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
             double sum = 0;
 
             for (int i = 0; i < Rank; i++)
-                sum += Math.Pow(coordinates[i], 2);
+                sum += Square(coordinates[i]);
 
             return Math.Sqrt(sum);
         }
@@ -63,6 +63,12 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
         this.coordinates = coordinates.ToArray();
     }
 
+    public Point(int rank, double commonCoordinate)
+    {
+        coordinates = new double[rank];
+        Array.Fill(coordinates, commonCoordinate);
+    }
+
     /// <summary>Gets the coordinate at the specified dimension.</summary>
     /// <param name="dimension">The zero-based index of the dimension to get the coordinate of.</param>
     /// <returns>The coordinate at the specified dimension.</returns>
@@ -86,9 +92,15 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
         return new Point(difference);
     }
 
+    public double DistanceFrom(Point other, out Point coordinateDistance)
+    {
+        coordinateDistance = DifferenceFrom(other);
+        return coordinateDistance.DistanceFromCenter;
+    }
+
     public double DistanceFrom(Point other)
     {
-        return DifferenceFrom(other).Absolute.DistanceFromCenter;
+        return DistanceFrom(other, out _);
     }
 
     /// <summary>Gets the Manhattan distance from another point.</summary>
@@ -228,6 +240,12 @@ public struct Point : IEqualityOperators<Point, Point>, IDominable<Point>
         builder.Append(')');
 
         return builder.ToString();
+    }
+
+    private static T Square<T>(T value)
+        where T : INumber<T>
+    {
+        return value * value;
     }
 
     /// <summary>Provides a coordinate comparison behavior that compares <seealso cref="Point"/> instances based on their coordinates on the target dimension.</summary>

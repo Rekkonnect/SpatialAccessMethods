@@ -91,29 +91,24 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         nodeCount = value;
         RecordBufferController.HeaderBlock.TreeNodeCount = value;
     }
-    private void IncreaseNodeCountWithoutResize()
+    private void IncreaseNodeCountWithoutResize(int increment = 1)
     {
-        nodeCount++;
+        nodeCount += increment;
         RecordBufferController.HeaderBlock.TreeNodeCount = nodeCount;
     }
-    private void DecreaseNodeCountWithoutResize()
+    private void IncreaseNodeCount(int increment = 1)
     {
-        nodeCount--;
-        RecordBufferController.HeaderBlock.TreeNodeCount = nodeCount;
-    }
-    private void IncreaseNodeCount()
-    {
-        IncreaseNodeCountWithoutResize();
-        EnsureLengthForNewNode();
-    }
-    private void DecreaseNodeCount()
-    {
-        DecreaseNodeCountWithoutResize();
+        IncreaseNodeCountWithoutResize(increment);
         EnsureLengthForNewNode();
     }
     private void EnsureLengthForNewNode()
     {
         TreeBufferController.EnsureLengthForEntry(nodeCount + 1);
+    }
+
+    public IEnumerable<int> GetAllPointedEntryIDs()
+    {
+        return GetAllLeafs().SelectMany(leaf => leaf.ChildrenIDs);
     }
 
     public LeafNode? LeafContainingValue(Point point, out TValue? value)
@@ -150,7 +145,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         queue.Enqueue(Root);
         while (queue.Count > 0)
         {
-            var current = queue.Dequeue();
+            var current = queue.Dequeue().GetFullyLoadedNode();
+
             if (current is LeafNode leaf)
                 yield return leaf;
 
@@ -221,7 +217,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         var currentNode = Root;
 
         int currentLevel = 0;
-        while (currentLevel <= level)
+        while (currentLevel < level)
         {
             if (currentNode is LeafNode)
                 return currentNode;
@@ -234,6 +230,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             var bestSubtree = new BestSubtreeInfo(node, comparer);
             bestSubtree.RegisterNodes(children);
             currentNode = bestSubtree.BestNode;
+            currentLevel++;
         }
         return currentNode;
     }
@@ -263,6 +260,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
                 // Remove the children IDs that are filtered out
                 node.ChildrenIDs.ExceptWith(removedDistances.Select(d => d.Entry.ID));
+                node.WriteChangesToBuffer();
 
                 foreach (var distance in removedDistances)
                 {
@@ -319,7 +317,10 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     private OverflowTreatmentResult OverflowTreatment(object operationReference, int level, Node node)
     {
         var stats = OverflowTreatmentStats.RecordInvocation(operationReference, level);
-        if (level > 0 && stats.CounterAtLevel(level) <= 1)
+        Debug.Assert(Root is not LeafNode, "The root must have already become a parent node in order to store the newly split leaf node.");
+        bool rootHasSingleChild = level is 1 && Root!.ChildrenCount is 1;
+        bool firstTimeInvokingLevel = level > 0 && stats.CounterAtLevel(level) <= 1;
+        if (!rootHasSingleChild && firstTimeInvokingLevel)
         {
             ReInsert(level, node);
             return OverflowTreatmentResult.ReInsert;
@@ -413,12 +414,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             // The dethroned node will have had its ID changed to a newly allocated one
             newRoot.AddChild(node);
             newRoot.AddChild(rightNode);
-            IncreaseNodeCount();
+            newRoot.WriteChangesToBuffer(); // Perhaps useless but being safe is not all too bad
+            IncreaseNodeCount(2);
         }
         else
         {
             Insert(level, rightNode);
         }
+        rightNode.WriteChangesToBuffer();
 
         RectangleDistribution AttemptSplit(double maxOrderRate)
         {
@@ -444,7 +447,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
                 RectangleDistribution[] GetDistributions()
                 {
-                    var result = new RectangleDistribution[distributionCount];
+                    var result = new RectangleDistribution[distributionCount - 1];
 
                     for (int k = 1; k < distributionCount; k++)
                     {
@@ -757,6 +760,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         parentSubtree.AddChild(node);
         IncreaseNodeCount();
+        parentSubtree.WriteChangesToBuffer();
     }
 
     public void Insert(TValue value)
@@ -768,7 +772,18 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         if (containingLeaf.IsFull)
         {
-            OverflowTreatment(operationReferenceFactory.CurrentOrNext(), Height - 1, containingLeaf);
+            if (containingLeaf.IsRoot)
+            {
+                var newRoot = AllocateNewParentRootNode(Enumerable.Empty<int>(), containingLeaf.Region);
+                Debug.Assert(Root is not null, "Found that the root was full but no root was found?");
+                Root = newRoot;
+                IncreaseNodeCount();
+                newRoot.AddChild(containingLeaf);
+                newRoot.WriteChangesToBuffer();
+                containingLeaf.WriteChangesToBuffer();
+            }
+
+            OverflowTreatment(operationReferenceFactory.CurrentOrNext(), Height, containingLeaf);
         }
 
         containingLeaf.AddEntry(value);
@@ -850,7 +865,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             }
 
             serialIDHandler.DeallocateID(TreeBufferController, eliminatedNode.ID);
-            DecreaseNodeCount();
+            IncreaseNodeCount(-1);
         }
     }
 
@@ -870,9 +885,9 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             throw new InvalidOperationException("Cannot bulk load an R*-tree that already contains nodes.");
 
         var entryArray = entries.ToExistingOrNewArray();
-        // Reset the ID as the value is not passed through in the case of structs
-        for (int i = 0; i < entryArray.Length; i++)
-            entryArray[i].ID = i;
+        //// Reset the ID as the value is not passed through in the case of structs
+        //for (int i = 0; i < entryArray.Length; i++)
+        //    entryArray[i].ID = i;
 
         int cappedOrder = (int)Math.Ceiling(Order * averageCapacity);
         // Using List instead of Stack for the freedom of exploring the intermediate nodes
@@ -1233,11 +1248,22 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 AddNodeToPriorityQueue(node);
             }
 
+            // Add the remaining nodes that are included in the search sphere
+            for (int i = currentLevel1Index; i < children.Length; i++)
+            {
+                var node = children[i];
+
+                if (searchSphere.Overlaps(node.Region))
+                {
+                    AddNodeToPriorityQueue(node);
+                }
+            }
+
             while (nodeQueue.Count > 0)
             {
                 nodeQueue.TryDequeue(out var dequeued, out double distance);
 
-                if (distance >= nnHeap.MaxValue.Distance)
+                if (IsTooLargeDistance(distance))
                 {
                     nodeQueue.Clear();
                     break;
@@ -1246,19 +1272,14 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 switch (dequeued)
                 {
                     case LeafNode leaf:
-                        // Attempt to delay heap trimming by the most possible,
-                        // in order to reduce the O(n) iterations that have to be performed
-                        // In theory, this is an optimization
-                        nnHeap.PreserveMaxEntryCount(neighbors);
-
                         var entries = leaf.GetEntries();
                         foreach (var entry in entries)
                         {
                             var entryDistance = entry.Location.DistanceFrom(point);
-                            if (entryDistance > nnHeap.MaxValue.Distance)
+                            if (IsTooLargeDistance(entryDistance))
                                 continue;
 
-                            nnHeap.Add(new NearestNeighborEntry(entry, distance));
+                            nnHeap.Add(new NearestNeighborEntry(entry, entryDistance));
                         }
                         break;
 
@@ -1266,6 +1287,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                         var parentChildren = parent.GetChildren();
                         AddNodesToPriorityQueue(parentChildren);
                         break;
+                }
+
+                bool IsTooLargeDistance(double distance)
+                {
+                    return nnHeap.EntryCount >= neighbors && distance >= nnHeap.MaxValue.Distance;
                 }
             }
 
@@ -1284,7 +1310,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             void ExpandCurrentSearchSphere()
             {
                 // Sanity check
-                if (currentLevel1Index >= Order - 1)
+                if (currentLevel1Index >= children.Length)
                     return;
 
                 searchSphere = GetForCurrentLevel1Index();
@@ -1300,10 +1326,19 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 while (searchSphere.Overlaps(children[currentLevel1Index].Region))
                 {
                     currentLevel1Index++;
+
+                    if (currentLevel1Index >= children.Length)
+                        return;
                 }
             }
 
-            return nnHeap.Select(e => e.Entry);
+            int totalNeighbors = Math.Min(neighbors, nnHeap.EntryCount);
+            var resultingEntries = new TValue[totalNeighbors];
+            for (int i = 0; i < totalNeighbors; i++)
+            {
+                resultingEntries[i] = nnHeap.Pop().Entry;
+            }
+            return resultingEntries;
         }
         else if (Root is LeafNode leafRoot)
         {
@@ -1345,7 +1380,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         while (nodeQueue.Count > 0)
         {
-            var iteratedNode = nodeQueue.Dequeue();
+            var iteratedNode = nodeQueue.Dequeue().GetFullyLoadedNode();
 
             switch (iteratedNode)
             {
@@ -1356,7 +1391,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                     break;
 
                 case ParentNode parent:
-                    var children = parent.GetChildren();
+                    var children = parent.GetLazyChildren();
                     var filteredChildren = children.Where(child => range.Overlaps(child.Region));
                     nodeQueue.EnqueueRange(filteredChildren);
                     break;
@@ -1420,8 +1455,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 return false;
         }
 
-        if (validateMerging && node.ShouldMerge)
-            return false;
+        //if (validateMerging && node.ShouldMerge)
+        //    return false;
 
         if (node.ShouldSplit)
             return false;
@@ -1473,6 +1508,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     private void InitializeRoot(TValue value)
     {
         Root = AllocateNewLeafRootNode(Enumerable.Empty<int>(), Rectangle.FromSinglePoint(value.Location));
+        RecordBufferController.HeaderBlock.MaxTreeNodeID = 1;
         NodeCount = 1;
     }
 
@@ -1498,7 +1534,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     // Preferably the spatial data table
     private TValue GetEntry(int id)
     {
-        var entrySpan = RecordBufferController.LoadDataSpan(id);
+        var entrySpan = RecordBufferController.LoadDataSpan(id - 1);
         return IRecordSerializable<TValue>.Parse(entrySpan, RecordBufferController.HeaderBlock, id);
     }
 
@@ -1584,7 +1620,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public NodeID ParentID { get; set; }
 
         // TODO: Reconsider non-abstract
-        public abstract int ChildrenCount { get; }
+        public virtual int ChildrenCount => ChildrenIDs.Count;
         public bool IsRoot => ParentID.IsNull;
 
         public bool IsFull => ChildrenIDs.Count >= Tree.MaxChildren;
@@ -1624,7 +1660,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public Node GetFullyLoadedNode()
         {
-            if (this is not LeafNode)
+            if (this is not LazyNode)
                 return this;
 
             return Tree.GetNode(ID)!;
@@ -1657,23 +1693,29 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             if (parentNode is null)
                 return;
 
-            UpdateParent(parentNode.ParentID);
-            parentNode.UpdateParent(ID);
+            UpdateParent(parentNode.ParentID, true);
+            parentNode.UpdateParent(ID, true);
         }
 
-        public void UpdateParent(ParentNode? node)
+        public void UpdateParent(ParentNode? node, bool updateParentChildrenIDs)
         {
-            UpdateParent(node?.ID ?? NodeID.Null);
+            UpdateParent(node?.ID ?? NodeID.Null, updateParentChildrenIDs);
         }
-        public void UpdateParent(int newParentID)
+        public void UpdateParent(int newParentID, bool updateParentChildrenIDs)
         {
             int oldParentID = ParentID;
-            var oldParentNode = Tree.GetNode(oldParentID);
-            var newParentNode = Tree.GetNode(newParentID);
-            ParentID = newParentID;
 
-            oldParentNode?.ChildrenIDs.Remove(ID);
-            newParentNode?.ChildrenIDs.Add(ID);
+            if (updateParentChildrenIDs)
+            {
+                var oldParentNode = Tree.GetNode(oldParentID);
+                var newParentNode = Tree.GetNode(newParentID);
+
+                oldParentNode?.ChildrenIDs.Remove(ID);
+                newParentNode?.ChildrenIDs.Add(ID);
+            }
+
+            ParentID = newParentID;
+            WriteParentID();
         }
 
         public void ExpandRegion(Point newPoint)
@@ -1693,6 +1735,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
                 return;
 
             Region = newRegion;
+            WriteRegion();
 
             var lazyParent = GetLazyParent();
             if (lazyParent is null)
@@ -1712,7 +1755,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public virtual void WriteChangesToBuffer()
         {
-            Debug.Assert(ChildrenIDs.Count <= Tree.MaxChildren, "Attempted to serialize a node with more children than the max allowed.");
+            Debug.Assert(ChildrenCount <= Tree.MaxChildren, "Attempted to serialize a node with more children than the max allowed.");
 
             var dataSpan = GetDataSpan(out var dataBlock);
             var writer = new SpanStream(dataSpan);
@@ -1726,6 +1769,16 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             Tree.TreeBufferController.MarkDirty(dataBlock);
         }
 
+        protected internal void WriteParentID()
+        {
+            var dataSpan = GetDataSpan(out var dataBlock);
+            var writer = new SpanStream(dataSpan);
+
+            WriteParentID(ref writer);
+
+            Tree.TreeBufferController.MarkDirty(dataBlock);
+        }
+
         protected void WriteParentID(ref SpanStream writer)
         {
             writer.WriteValue(ParentID);
@@ -1733,6 +1786,17 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         protected void SkipParentID(ref SpanStream writer)
         {
             writer.AdvanceValue<int>();
+        }
+
+        protected internal void WriteRegion()
+        {
+            var dataSpan = GetDataSpan(out var dataBlock);
+            var writer = new SpanStream(dataSpan);
+
+            SkipParentID(ref writer);
+            WriteRegion(ref writer);
+
+            Tree.TreeBufferController.MarkDirty(dataBlock);
         }
 
         protected void WriteRegion(ref SpanStream writer)
@@ -1757,7 +1821,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         protected void WriteTypeAndChildrenCount(ref SpanStream writer)
         {
-            var typeAndChildren = new TypeAndChildren(NodeType, ChildrenIDs.Count);
+            var typeAndChildren = new TypeAndChildren(NodeType, ChildrenCount);
             writer.WriteValue(typeAndChildren.SerializedByte);
         }
         protected void SkipTypeAndChildrenCount(ref SpanStream writer)
@@ -1820,7 +1884,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             };
         }
 
-        private protected TNode TrimRegion<TChildren, TNode>(Rectangle newRegion, Func<IEnumerable<TChildren>> childrenRetriever, Predicate<TChildren> childrenPredicate, NewNodeAllocator<TNode> allocator)
+        private protected TNode TrimRegion<TChildren, TNode>(Rectangle newRegion, Func<IEnumerable<TChildren>> childrenRetriever, Predicate<TChildren> childrenPredicate, NewNodeAllocator<TNode> allocator, Func<IEnumerable<TChildren>, Rectangle> outsideChildrenRectangleCreator)
             where TChildren : IID
             where TNode : Node
         {
@@ -1832,7 +1896,8 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             Region = newRegion;
 
             ChildrenIDs = new(inside.Select(c => c.ID));
-            return allocator(ParentID, outside.Select(c => c.ID), newRegion);
+            var outsideMBR = outsideChildrenRectangleCreator(outside);
+            return allocator(ParentID, outside.Select(c => c.ID), outsideMBR);
         }
 
         public int GetLevel()
@@ -2046,11 +2111,15 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public override ParentNode TrimRegion(Rectangle newRegion)
         {
-            return TrimRegion(newRegion, GetChildren, ChildrenPredicate, Tree.AllocateNewParentNode);
+            return TrimRegion(newRegion, GetChildren, ChildrenPredicate, Tree.AllocateNewParentNode, CreateOutsideRectangle);
 
             bool ChildrenPredicate(Node child)
             {
                 return newRegion.Contains(child.Region);
+            }
+            static Rectangle CreateOutsideRectangle(IEnumerable<Node> outside)
+            {
+                return Rectangle.CreateForRectangles(outside.Select(e => e.Region).ToArray());
             }
         }
 
@@ -2101,7 +2170,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public void AddChild(Node childNode)
         {
             ChildrenIDs.Add(childNode.ID);
-            childNode.UpdateParent(this);
+            childNode.UpdateParent(this, false);
             ExpandRegion(childNode.Region);
         }
 
@@ -2112,7 +2181,6 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
     }
     public sealed class LeafNode : Node
     {
-        public override int ChildrenCount => 0;
         public int EntryCount => ChildrenIDs.Count;
 
         public override NodeType NodeType => NodeType.Leaf;
@@ -2130,11 +2198,15 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         public override LeafNode TrimRegion(Rectangle newRegion)
         {
-            return TrimRegion(newRegion, GetEntries, ChildrenPredicate, Tree.AllocateNewLeafNode);
+            return TrimRegion(newRegion, GetEntries, ChildrenPredicate, Tree.AllocateNewLeafNode, CreateOutsideRectangle);
 
             bool ChildrenPredicate(TValue entry)
             {
                 return newRegion.Contains(entry.Location);
+            }
+            static Rectangle CreateOutsideRectangle(IEnumerable<TValue> outside)
+            {
+                return Rectangle.CreateForPoints(outside.Select(e => e.Location).ToArray());
             }
         }
 
@@ -2151,28 +2223,6 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public override IEnumerable<Rectangle> GetChildrenRectangles()
         {
             return GetEntries().Select(e => Rectangle.FromSinglePoint(e.Location));
-        }
-    }
-
-    public delegate void NodeSectionTraverser(ref SpanStream writer);
-
-    public enum NodeSectionTraversalMode
-    {
-        Skip,
-        Write,
-    }
-
-    public record struct NodeSectionTraversers(NodeSectionTraverser Writer, NodeSectionTraverser Skipper)
-    {
-        public NodeSectionTraverser TraverserForMode(NodeSectionTraversalMode mode) => mode switch
-        {
-            NodeSectionTraversalMode.Write => Writer,
-            _ => Skipper,
-        };
-
-        public void Perform(NodeSectionTraversalMode mode, ref SpanStream writer)
-        {
-            TraverserForMode(mode)(ref writer);
         }
     }
 
@@ -2199,21 +2249,27 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         Leaf,
     }
 
-    private class OperationReferenceFactory
-    {
-        private object? current;
+    #region Node Section Traversal
+    public delegate void NodeSectionTraverser(ref SpanStream writer);
 
-        public void DisposeCurrent()
+    public enum NodeSectionTraversalMode
+    {
+        Skip,
+        Write,
+    }
+
+    public record struct NodeSectionTraversers(NodeSectionTraverser Writer, NodeSectionTraverser Skipper)
+    {
+        public NodeSectionTraverser TraverserForMode(NodeSectionTraversalMode mode) => mode switch
         {
-            current = null;
-        }
-        public object ForceNext()
+            NodeSectionTraversalMode.Write => Writer,
+            _ => Skipper,
+        };
+
+        public void Perform(NodeSectionTraversalMode mode, ref SpanStream writer)
         {
-            return current = new();
-        }
-        public object CurrentOrNext()
-        {
-            return current ?? ForceNext();
+            TraverserForMode(mode)(ref writer);
         }
     }
+    #endregion
 }

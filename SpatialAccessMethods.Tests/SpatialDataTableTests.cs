@@ -1,6 +1,7 @@
 ﻿using Garyon.Extensions;
-using Garyon.Objects.Enumerators;
+using Garyon.Objects;
 using SpatialAccessMethods.FileManagement;
+using SpatialAccessMethods.Generation;
 using SpatialAccessMethods.QualityAssurance;
 
 namespace SpatialAccessMethods.Tests;
@@ -72,10 +73,63 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
         foreach (var neighborCount in new[] { 12, 14, 29, 58, 124, 178, 341, 589 })
         {
             var nnQuery = new SpatialDataTable<MapRecordEntry>.NearestNeighborQuery(point, neighborCount);
-            var neighbors = nnQuery.Perform(Table).ToHashSet();
-            var sortedByDistance = sortedEntries.Take(neighborCount).ToHashSet();
+            var neighbors = nnQuery.Perform(Table).ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
+            var sortedByDistance = sortedEntries.Take(neighborCount).ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
 
-            Assert.That(sortedByDistance.SetEquals(neighbors), Is.True);
+            var maxDistance = neighbors.Max(e => e.Location.DistanceFrom(point));
+            var expectedMaxDistance = sortedByDistance.Max(e => e.Location.DistanceFrom(point));
+            Assert.That(maxDistance, Is.EqualTo(expectedMaxDistance));
+        }
+    }
+
+    [Test]
+    [TestCase(2)]
+    [TestCase(3)]
+    [TestCase(4)]
+    public void RangeQuery(int dimensionality)
+    {
+        GenerateBulkLoad(dimensionality);
+
+        var mbr = entries.MBR;
+
+        // Sufficiently large number to probabilistically catch multiple cases without killing speed running the tests
+        // Currently there is high chance this test fails
+        // And when run in parallel that chance is increased
+        for (int i = 0; i < 23; i++)
+        {
+            var a = PointGenerator.Shared.NextWithinRectangle(mbr);
+            var b = PointGenerator.Shared.NextWithinRectangle(mbr);
+            var range = Rectangle.FromVertices(a, b);
+            var containedEntries = entries.Entries.Where(e => range.Contains(e.Location)).ToArray();
+
+            var rangeQuery = new SpatialDataTable<MapRecordEntry>.RangeQuery<Rectangle>(range);
+            var containedFromQuery = rangeQuery.Perform(Table).ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
+            Assert.That(containedFromQuery.SetEquals(containedEntries), Is.True);
+        }
+    }
+
+    [Test]
+    [TestCase(2)]
+    [TestCase(3)]
+    [TestCase(4)]
+    public void SkylineQuery(int dimensionality)
+    {
+        GenerateBulkLoad(dimensionality);
+
+        var skylineQuery = new SpatialDataTable<MapRecordEntry>.SkylineQuery(Extremum.Minimum);
+        var skylinePoints = skylineQuery.Perform(Table).ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
+        var entrySet = entries.Entries.ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
+        entrySet.ExceptWith(entrySet);
+
+        // Only this check is a sufficient criterion
+        // If there were any entries missing from the skyline, their domination would be resolved as indeterminate
+        foreach (var entry in entrySet)
+        {
+            foreach (var skylinePoint in skylinePoints)
+            {
+                var domination = skylinePoint.Location.ResolveDomination(entry.Location, Extremum.Minimum);
+                Assert.That(domination, Is.EqualTo(Domination.Dominant));
+            }
         }
     }
 
@@ -124,7 +178,8 @@ public class SpatialDataTableTests : SpatialDataTableQAContainer
         var tableEntries = Table.GetAllEntries().ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
         var generatedEntries = entries.Entries.ToHashSet(MapRecordEntry.DataEqualityComparer.Instance);
 
-        tableEntries.IntersectWith(generatedEntries);
-        Assert.That(tableEntries.Count, Is.EqualTo(generatedEntries.Count));
+        Assert.That(tableEntries.SetEquals(generatedEntries), Is.True);
+        var pointedEntryIDs = Tree.GetAllPointedEntryIDs().ToHashSet();
+        Assert.That(pointedEntryIDs.SetEquals(tableEntries.Select(e => e.ID)), Is.True);
     }
 }
