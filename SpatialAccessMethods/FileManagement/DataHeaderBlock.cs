@@ -4,13 +4,14 @@ using UnitsNet.NumberExtensions.NumberToInformation;
 
 namespace SpatialAccessMethods.FileManagement;
 
-[HeaderProperty<int>("BlockSizeBytes")]
-[HeaderProperty<int>("BlockCount")]
-[HeaderProperty<int>("RecordCount")]
-[HeaderProperty<int>("MaxID")]
-[HeaderProperty<int>("MaxTreeNodeID")]
-[HeaderProperty<int>("TreeNodeCount")]
-[HeaderProperty<int, byte>("Dimensionality")]
+[HeaderProperty<int>(nameof(BlockSizeBytes))]
+[HeaderProperty<int>(nameof(BlockCount))]
+[HeaderProperty<int>(nameof(RecordCount))]
+[HeaderProperty<int>(nameof(MaxID))]
+[HeaderProperty<int>(nameof(MaxTreeNodeID))]
+[HeaderProperty<int>(nameof(TreeNodeCount))]
+[HeaderProperty<int>(nameof(Dimensionality))]
+[HeaderProperty<int>(nameof(RootID))]
 public partial struct DataHeaderBlock : IHeaderBlock
 {
     public RawData Data { get; set; }

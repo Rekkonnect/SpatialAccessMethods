@@ -77,6 +77,19 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             EntryCountGetter = GetEntryCount,
             ValidIDPredicate = IsValidNode,
         };
+
+        LoadRoot();
+    }
+
+    private void LoadRoot()
+    {
+        int rootID = RecordBufferController.HeaderBlock.RootID;
+        var rootNodeID = new NodeID(rootID);
+        if (rootNodeID.IsNull)
+            return;
+
+        var rootNode = GetNode(rootID);
+        root = rootNode;
     }
 
     private int GetMaxID() => RecordBufferController.HeaderBlock.MaxTreeNodeID;
