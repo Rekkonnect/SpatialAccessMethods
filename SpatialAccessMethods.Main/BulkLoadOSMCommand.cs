@@ -12,13 +12,12 @@ public sealed class BulkLoadOSMCommand : FailableConsoleCommand
     {
         IsCommand("bulkload", "Bulk load the database from a file");
 
-        HasLongDescription(
-"""
-Loads the contents of an .osm file and attempts to bulk load
-the entries to the database.
+        HasLongDescription("""
+                           Loads the contents of an .osm file and attempts to bulk load
+                           the entries to the database.
 
-Usage example: `bulkload -f "/path/to/file.osm"`
-""");
+                           Usage example: `bulkload -f "/path/to/file.osm"`
+                           """);
 
         HasRequiredOption("f|file=", "The full path of the file", p => FileLocation = p);
     }
@@ -29,7 +28,7 @@ Usage example: `bulkload -f "/path/to/file.osm"`
         document.Load(FileLocation!);
         var entries = GetEntries(document).ToArray();
         DatabaseController.Instance.Table.BulkLoad(entries);
-        
+
         return Success;
     }
 
