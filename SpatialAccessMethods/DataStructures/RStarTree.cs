@@ -59,9 +59,6 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         get => root;
         private set
         {
-            Debug.Assert(value?.ID is null or NodeID.RootID);
-
-            DethroneRoot();
             root = value;
         }
     }
@@ -387,15 +384,6 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
             }
             return stats;
         }
-    }
-
-    private void DethroneRoot()
-    {
-        if (root is null)
-            return;
-
-        root.ID = AllocateNextID();
-        root.WriteChangesToBuffer();
     }
 
     private void Split(int level, Node node)
@@ -772,6 +760,7 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         if (containingLeaf.IsFull)
         {
+            // Only this has problem -- FIX
             if (containingLeaf.IsRoot)
             {
                 var newRoot = AllocateNewParentRootNode(Enumerable.Empty<int>(), containingLeaf.Region);
@@ -923,12 +912,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
         // Allocate it beforehand to make sure that it is not being used elsewhere
         int rootID = AllocateNextID();
-        Debug.Assert(rootID is NodeID.RootID);
 
         if (treeHeight > 1)
         {
             int rootChildrenCount = levelNodeCounts[1];
-            var childrenDesignNodes = CreateDesignNodes(entryArray, rootChildrenCount, NodeID.Root);
+            var childrenDesignNodes = CreateDesignNodes(entryArray, rootChildrenCount, rootID);
 
             var rootChildrenIDs = childrenDesignNodes.Select(node => node.ID);
             Root = AllocateNewParentRootNode(rootChildrenIDs, rootRectangle);
@@ -1549,16 +1537,13 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         return new ParentNode(this, newID, parentID, childrenIDs, region);
     }
 
-    // These methods assume that RootID has been allocated beforehand
-    // This could be improved in the ID allocator such that RootID is always assumed allocated
-    // There is not enough time to mess with that
     private LeafNode AllocateNewLeafRootNode(IEnumerable<int> childrenIDs, Rectangle region)
     {
-        return new LeafNode(this, NodeID.Root, NodeID.Null, childrenIDs, region);
+        return AllocateNewLeafNode(NodeID.Null, childrenIDs, region);
     }
     private ParentNode AllocateNewParentRootNode(IEnumerable<int> childrenIDs, Rectangle region)
     {
-        return new ParentNode(this, NodeID.Root, NodeID.Null, childrenIDs, region);
+        return AllocateNewParentNode(NodeID.Null, childrenIDs, region);
     }
 
     internal delegate TNode NewNodeAllocator<TNode>(int parentID, IEnumerable<int> childrenIDs, Rectangle region)
@@ -1619,19 +1604,24 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
         public int ID { get; internal set; }
         public NodeID ParentID { get; set; }
 
-        // TODO: Reconsider non-abstract
         public virtual int ChildrenCount => ChildrenIDs.Count;
         public bool IsRoot => ParentID.IsNull;
 
         public bool IsFull => ChildrenIDs.Count >= Tree.MaxChildren;
         public bool IsEmpty => ChildrenIDs.Count is 0;
 
-        public bool IsInvalid => (ChildrenIDs.Count > Tree.MaxChildren)
-                              || this is
-                              {
-                                  NodeType: NodeType.Leaf,
-                                  ChildrenIDs.Count: 0,
-                              };
+        public bool IsInvalid
+        {
+            get
+            {
+                return (ChildrenIDs.Count > Tree.MaxChildren)
+                    || this is
+                    {
+                        NodeType: NodeType.Leaf,
+                        ChildrenIDs.Count: 0,
+                    };
+            }
+        }
 
         public bool ShouldMerge => !IsRoot && ChildrenIDs.Count < Tree.MinChildren;
         public bool ShouldSplit => ChildrenIDs.Count > Tree.MaxChildren;
@@ -2228,14 +2218,11 @@ public sealed class RStarTree<TValue> : ISecondaryStorageDataStructure
 
     public record struct NodeID(int ID)
     {
-        public const int RootID = 1;
         private const int nullID = 0;
 
         public static readonly NodeID Null = new(nullID);
-        public static readonly NodeID Root = new(RootID);
 
         public bool IsNull => ID <= nullID;
-        public bool IsRoot => ID is RootID;
 
         public static implicit operator NodeID(int id) => new(id);
         public static implicit operator int(NodeID id) => id.ID;
